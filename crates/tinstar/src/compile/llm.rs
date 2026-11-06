@@ -170,15 +170,27 @@ impl Llm for Anthropic {
         schema: &Value,
         _tag: &str,
     ) -> Result<Reply> {
+        // Structured outputs take closed objects only; a schema with free-form ones (a law's
+        // ast-grep rule) goes in the prompt instead, as for the other providers.
+        let (system, output_config) = if closed(schema) {
+            (
+                system.to_string(),
+                json!({ "effort": "high", "format": { "type": "json_schema", "schema": schema } }),
+            )
+        } else {
+            (
+                format!(
+                    "{system}\n\nAnswer with one JSON object matching this JSON Schema, and nothing else:\n{schema}"
+                ),
+                json!({ "effort": "high" }),
+            )
+        };
         let body = json!({
             "model": self.model,
             "max_tokens": 16000,
             "system": [{ "type": "text", "text": system, "cache_control": { "type": "ephemeral" } }],
             "messages": messages.iter().map(anthropic_message).collect::<Vec<_>>(),
-            "output_config": {
-                "effort": "high",
-                "format": { "type": "json_schema", "schema": schema },
-            },
+            "output_config": output_config,
             // If a safety classifier declines, the API retries on a fallback model by itself.
             "fallbacks": "default",
         });
@@ -222,6 +234,19 @@ impl Llm for Anthropic {
                 }
             },
         })
+    }
+}
+
+/// Whether every object in a JSON Schema lists its properties (what structured outputs accept).
+fn closed(schema: &Value) -> bool {
+    match schema {
+        Value::Object(m) => {
+            let open_object =
+                m.get("type") == Some(&json!("object")) && !m.contains_key("properties");
+            !open_object && m.values().all(closed)
+        }
+        Value::Array(a) => a.iter().all(closed),
+        _ => true,
     }
 }
 

@@ -50,7 +50,35 @@
   {
    "laws": [
     {
-     "yaml": "id: containers-have-limits\nkind: config\nstatement: Every container in a Kubernetes Deployment declares resource limits.\nsource: RULES.md#containers\nmessage: Container has no resource limits\nhint: Add resources.limits with cpu and memory.\nlanguage: yaml\nfiles: [\"deploy/**/*.yaml\"]\nmatch: { kind: Deployment }\nassert:\n  - path: spec.template.spec.containers[*].resources.limits\n    exists: true\nexamples:\n  valid:\n    - |-\n      kind: Deployment\n      spec: { template: { spec: { containers: [ { name: api, resources: { limits: { cpu: 1 } } } ] } } }\n    - |-\n      kind: Service\n      spec: {}\n  invalid:\n    - |-\n      kind: Deployment\n      spec: { template: { spec: { containers: [ { name: api } ] } } }\n    - |-\n      kind: Deployment\n      spec: { template: { spec: { containers: [ { name: api, resources: { requests: { cpu: 1 } } } ] } } }\n"
+     "id": "containers-have-limits",
+     "kind": "config",
+     "statement": "Every container in a Kubernetes Deployment declares resource limits.",
+     "source": "RULES.md#containers",
+     "message": "Container has no resource limits",
+     "hint": "Add resources.limits with cpu and memory.",
+     "language": "yaml",
+     "files": [
+      "deploy/**/*.yaml"
+     ],
+     "match": {
+      "kind": "Deployment"
+     },
+     "assert": [
+      {
+       "path": "spec.template.spec.containers[*].resources.limits",
+       "exists": true
+      }
+     ],
+     "examples": {
+      "valid": [
+       "kind: Deployment\nspec: { template: { spec: { containers: [ { name: api, resources: { limits: { cpu: 1 } } } ] } } }",
+       "kind: Service\nspec: {}"
+      ],
+      "invalid": [
+       "kind: Deployment\nspec: { template: { spec: { containers: [ { name: api } ] } } }",
+       "kind: Deployment\nspec: { template: { spec: { containers: [ { name: api, resources: { requests: { cpu: 1 } } } ] } } }"
+      ]
+     }
     }
    ],
    "not_checkable": [],

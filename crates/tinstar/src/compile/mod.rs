@@ -14,6 +14,7 @@ mod ledger;
 mod llm;
 mod noise;
 mod sections;
+mod strict_json;
 mod triage;
 
 use std::collections::HashSet;
@@ -72,9 +73,7 @@ fn schema() -> Value {
                 "type": "array",
                 "items": {
                     "type": "object",
-                    "additionalProperties": false,
-                    "required": ["yaml"],
-                    "properties": { "yaml": { "type": "string" } }
+                    "description": "One law, as a JSON object with the fields of a law file."
                 }
             },
             "not_checkable": {
@@ -102,7 +101,7 @@ fn schema() -> Value {
 #[derive(Deserialize)]
 struct Answer {
     #[serde(default)]
-    laws: Vec<DraftLaw>,
+    laws: Vec<Value>,
     #[serde(default)]
     not_checkable: Vec<NotCheckable>,
     /// Laws sent back by the noise check whose hits the LLM says are real violations.
@@ -110,9 +109,17 @@ struct Answer {
     confirmed: Vec<Confirmed>,
 }
 
-#[derive(Deserialize)]
-struct DraftLaw {
-    yaml: String,
+/// A law as the LLM wrote it, as YAML text for the law file. Laws come as JSON objects: no YAML
+/// syntax to get wrong (unquoted colons, indentation), and tinstar writes the YAML. An object
+/// holding only `yaml` text (the older answer shape) is taken as it is.
+fn draft_yaml(law: &Value) -> Result<String, String> {
+    match law {
+        Value::Object(m) if m.len() == 1 && m.get("yaml").is_some_and(Value::is_string) => {
+            Ok(m["yaml"].as_str().unwrap_or_default().to_string())
+        }
+        Value::Object(_) => serde_yaml::to_string(law).map_err(|e| e.to_string()),
+        _ => Err("each item of `laws` must be a JSON object (one law)".into()),
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -151,8 +158,9 @@ struct Rejected {
 struct Outcome {
     accepted: Vec<Accepted>,
     rejected: Vec<Rejected>,
-    /// Laws the LLM dropped after the noise check: (id, hits).
-    dropped: Vec<(String, usize)>,
+    /// Laws the LLM dropped after the noise check. They passed their examples, so they are kept
+    /// as drafts for a person who may still want them (as warnings, say).
+    dropped: Vec<Accepted>,
     not_checkable: Vec<NotCheckable>,
     attempts: usize,
     usage: Usage,
@@ -386,8 +394,30 @@ pub fn run(root: &Path, opts: Options) -> Result<ExitCode> {
             section_laws.push(id.clone());
             written.push(id);
         }
-        for (id, hits) in &outcome.dropped {
-            println!("  ~ {id}: dropped after the noise check (it fired {hits} time(s))");
+        for a in &outcome.dropped {
+            let dir = pending_dir.join("rejected");
+            std::fs::create_dir_all(&dir)?;
+            let path = dir.join(format!("{}.yaml", a.id));
+            std::fs::write(
+                &path,
+                format!(
+                    "# Drafted by `tinstar compile` from {doc_name}#{} with {}. It passes its\n\
+                     # {} example(s) but fires {} time(s) in the project, and the LLM dropped it after\n\
+                     # the noise check. Keep it (maybe as `severity: warning`) by moving it to\n\
+                     # .tinstar/laws/, or delete it.\n{}\n",
+                    section.anchor,
+                    llm.describe(),
+                    a.examples,
+                    a.hits,
+                    a.yaml.trim_end()
+                ),
+            )?;
+            println!(
+                "  ~ {}: dropped after the noise check (it fired {} time(s))\n    draft kept in {}",
+                a.id,
+                a.hits,
+                path.strip_prefix(root).unwrap_or(&path).display()
+            );
         }
         for r in &outcome.rejected {
             rejected += 1;
@@ -523,8 +553,16 @@ fn compile_section(ctx: &Ctx, section: &Section) -> Outcome {
     let mut held: Vec<(Accepted, Vec<Diagnostic>)> = Vec::new();
     // Each law goes through the noise check once: a narrowed version is taken as it is.
     let mut reviewed: HashSet<String> = HashSet::new();
+    // Laws still failing after the last regular answer.
+    let mut rejected: Vec<Rejected> = Vec::new();
 
-    for attempt in 1..=ctx.attempts {
+    // `attempts` answers to get laws right, plus one more, only for the noise check, when laws
+    // that passed on the last answer still wait for it.
+    for attempt in 1..=ctx.attempts + 1 {
+        let noise_round = attempt > ctx.attempts;
+        if noise_round && held.is_empty() {
+            break;
+        }
         out.attempts = attempt;
         let reply = match ctx
             .llm
@@ -539,7 +577,9 @@ fn compile_section(ctx: &Ctx, section: &Section) -> Outcome {
         out.usage += reply.usage;
         messages.push(reply.message.clone());
 
-        let answer: Answer = match serde_json::from_str(reply.text.trim()) {
+        let parsed =
+            strict_json::parse(json_body(&reply.text)).and_then(serde_json::from_value::<Answer>);
+        let answer: Answer = match parsed {
             Ok(a) => a,
             Err(e) => {
                 messages.push(json!({ "role": "user", "content": format!("Your answer was not valid JSON ({e}). Answer again with the JSON object only.") }));
@@ -555,40 +595,67 @@ fn compile_section(ctx: &Ctx, section: &Section) -> Outcome {
                 out.not_checkable.push(nc);
             }
         }
+        let drafts: Vec<Result<String, String>> = answer.laws.iter().map(draft_yaml).collect();
+        let answered: Vec<Option<String>> = drafts
+            .iter()
+            .map(|d| d.as_ref().ok().and_then(|y| id_of(y)))
+            .collect();
+        if noise_round {
+            noise_verdicts(
+                ctx,
+                &source,
+                &answer.confirmed,
+                &drafts,
+                &answered,
+                &mut held,
+                &mut out,
+                attempt,
+            );
+            break;
+        }
         // The verdict on laws held by the noise check: confirmed ones are kept; the others are
         // dropped, unless a narrower version came back (it is checked below).
         for (a, _) in std::mem::take(&mut held) {
-            let narrowed = answer
-                .laws
-                .iter()
-                .any(|d| id_of(&d.yaml).as_deref() == Some(&a.id));
+            let narrowed = answered.iter().any(|id| id.as_deref() == Some(&a.id));
             match answer.confirmed.iter().find(|c| c.id == a.id) {
                 Some(c) => out.accepted.push(Accepted {
                     confirmed: Some(c.reason.clone()),
                     ..a
                 }),
-                None if !narrowed => out.dropped.push((a.id, a.hits)),
+                None if !narrowed => out.dropped.push(a),
                 None => {}
             }
         }
         // A failing law the answer leaves out stays failing: it is asked for again, and in the
         // end kept as a rejected draft rather than lost.
         let previous = std::mem::take(&mut failing);
-        let answered: Vec<Option<String>> = answer.laws.iter().map(|d| id_of(&d.yaml)).collect();
         failing.extend(previous.into_iter().filter(|r| {
             !answered
                 .iter()
                 .any(|a| a.as_deref() == Some(r.label.as_str()))
         }));
-        for (n, draft) in answer.laws.iter().enumerate() {
-            let label = id_of(&draft.yaml).unwrap_or_else(|| format!("law #{}", n + 1));
+        for (n, draft) in drafts.into_iter().enumerate() {
+            let label = answered[n]
+                .clone()
+                .unwrap_or_else(|| format!("law #{}", n + 1));
+            let draft = match draft {
+                Ok(yaml) => yaml,
+                Err(error) => {
+                    failing.push(Rejected {
+                        label,
+                        error,
+                        yaml: answer.laws[n].to_string(),
+                    });
+                    continue;
+                }
+            };
             let taken =
                 |id: &str| ctx.taken.contains(id) || out.accepted.iter().any(|a| a.id == id);
-            match validate(ctx, &draft.yaml, &source) {
+            match validate(ctx, &draft, &source) {
                 Ok((a, _)) if taken(&a.id) => failing.push(Rejected {
                     error: format!("the id `{}` is already used; choose another", a.id),
                     label,
-                    yaml: draft.yaml.clone(),
+                    yaml: draft.clone(),
                 }),
                 Ok((a, hits)) if a.hits > ctx.noise_limit && reviewed.insert(a.id.clone()) => {
                     held.push((Accepted { attempt, ..a }, hits));
@@ -605,14 +672,19 @@ fn compile_section(ctx: &Ctx, section: &Section) -> Outcome {
                 Err(error) => failing.push(Rejected {
                     label,
                     error,
-                    yaml: draft.yaml.clone(),
+                    yaml: draft.clone(),
                 }),
             }
         }
         if failing.is_empty() && held.is_empty() {
             break;
         }
-        if attempt < ctx.attempts {
+        if attempt == ctx.attempts {
+            // Out of answers for getting laws right: what still fails is final. Laws waiting for
+            // the noise check get their own, last round.
+            rejected.append(&mut failing);
+        }
+        if attempt <= ctx.attempts && !(failing.is_empty() && held.is_empty()) {
             let mut feedback = String::new();
             if !failing.is_empty() {
                 feedback.push_str("tinstar checked your laws. These failed:\n\n");
@@ -639,16 +711,68 @@ fn compile_section(ctx: &Ctx, section: &Section) -> Outcome {
             messages.push(json!({ "role": "user", "content": feedback }));
         }
     }
-    // Answers ran out while laws waited for the noise check: keep them for the person reviewing.
+    // The noise round's answer was not valid JSON: keep held laws for the person reviewing.
     for (mut a, _) in held {
         a.warnings.push(format!(
-            "fires {} times in the project; the noise check ran out of answers",
+            "fires {} times in the project; the noise check got no usable answer",
             a.hits
         ));
         out.accepted.push(a);
     }
-    out.rejected = failing;
+    rejected.append(&mut failing);
+    out.rejected = rejected;
     out
+}
+
+/// The last round's answer, about laws held by the noise check only. Each is confirmed, replaced by
+/// a narrower version, or dropped; a narrower version that breaks keeps the original, with a
+/// warning, since the original passed its examples.
+#[allow(clippy::too_many_arguments)]
+fn noise_verdicts(
+    ctx: &Ctx,
+    source: &str,
+    confirmed: &[Confirmed],
+    drafts: &[Result<String, String>],
+    answered: &[Option<String>],
+    held: &mut Vec<(Accepted, Vec<Diagnostic>)>,
+    out: &mut Outcome,
+    attempt: usize,
+) {
+    for (mut a, _) in std::mem::take(held) {
+        if let Some(c) = confirmed.iter().find(|c| c.id == a.id) {
+            out.accepted.push(Accepted {
+                confirmed: Some(c.reason.clone()),
+                ..a
+            });
+            continue;
+        }
+        let Some(n) = answered.iter().position(|id| id.as_deref() == Some(&a.id)) else {
+            out.dropped.push(a);
+            continue;
+        };
+        let narrowed = drafts[n]
+            .clone()
+            .and_then(|yaml| validate(ctx, &yaml, source).map(|(v, _)| v));
+        match narrowed {
+            Ok(mut v) => {
+                if v.hits > ctx.noise_limit {
+                    v.warnings.push(format!(
+                        "still fires {} times in the project after the noise check",
+                        v.hits
+                    ));
+                }
+                out.accepted.push(Accepted { attempt, ..v });
+            }
+            Err(e) => {
+                a.warnings.push(format!(
+                    "fires {} times in the project; its narrower version failed: {}",
+                    a.hits,
+                    e.lines().next().unwrap_or_default()
+                ));
+                out.accepted.push(a);
+            }
+        }
+    }
 }
 
 /// Compiles a drafted law and runs it against its examples, then on the project (its hits).
@@ -698,6 +822,14 @@ fn validate(ctx: &Ctx, yaml: &str, source: &str) -> Result<(Accepted, Vec<Diagno
         },
         hits,
     ))
+}
+
+/// The JSON object in an answer, without a Markdown fence or words around it.
+fn json_body(text: &str) -> &str {
+    match (text.find('{'), text.rfind('}')) {
+        (Some(a), Some(b)) if a < b => &text[a..=b],
+        _ => text.trim(),
+    }
 }
 
 fn id_of(yaml: &str) -> Option<String> {

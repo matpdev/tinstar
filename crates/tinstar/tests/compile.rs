@@ -163,6 +163,12 @@ fn triage_noise_check_and_incremental_runs() {
         std::fs::read_to_string(dir.join(".tinstar/laws/pending/containers-have-limits.yaml"))
             .unwrap();
     assert!(limits.contains("# Kept after the noise check:"), "{limits}");
+    // That law came as a JSON object; tinstar wrote it as YAML.
+    assert!(
+        limits.contains("\nid: containers-have-limits\n"),
+        "{limits}"
+    );
+    assert!(limits.contains("\nexamples:\n"), "{limits}");
     assert!(out.contains("✓ money-is-cents"), "{out}");
 
     // Nothing changed: no call at all (the replay has no answers left, so a call would fail).
@@ -174,5 +180,32 @@ fn triage_noise_check_and_incremental_runs() {
         "{out}"
     );
     assert!(out.contains("0 input tokens"), "{out}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// With one answer for getting laws right, a law that passed but fires too often still gets its
+/// noise check, in one extra round of its own.
+#[test]
+fn the_noise_check_has_a_round_of_its_own() {
+    let dir = fresh_shop("noise-round");
+    let agents = std::fs::read_to_string(dir.join("AGENTS.md")).unwrap();
+    std::fs::write(dir.join("RULES.md"), agents).unwrap();
+    let args = [
+        "compile",
+        "RULES.md",
+        "--section",
+        "money",
+        "--attempts",
+        "1",
+        "--noise-limit",
+        "0",
+    ];
+    let (code, out) = tinstar_with(&dir, "compile-flow-replay.json", &args);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("✓ money-is-cents"), "{out}");
+    assert!(
+        out.contains("kept after the noise check: cart.ts really types a discount as number"),
+        "{out}"
+    );
     std::fs::remove_dir_all(&dir).unwrap();
 }

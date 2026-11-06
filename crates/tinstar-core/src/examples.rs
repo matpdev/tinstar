@@ -68,17 +68,28 @@ impl Law {
 
     fn hits_in(&self, example: &Example) -> Result<usize, String> {
         match (&self.check, example) {
-            (Check::Layout(layout), Example::Files(files)) => {
-                let all: Vec<PathBuf> = files.iter().map(PathBuf::from).collect();
+            (Check::Layout(layout), example) => {
+                let all: Vec<PathBuf> = match example {
+                    Example::Files(files) => files.iter().map(PathBuf::from).collect(),
+                    // A single path, or one path per line, is a small project too.
+                    Example::Source(text) if is_path_list(text) => text
+                        .lines()
+                        .map(str::trim)
+                        .filter(|l| !l.is_empty())
+                        .map(PathBuf::from)
+                        .collect(),
+                    Example::Source(_) => {
+                        return Err("layout examples are file paths (a list of paths per \
+                                    example, e.g. [\"src/a.rs\", \"src/b.rs\"]), not code"
+                            .into());
+                    }
+                };
                 let selected: Vec<&Path> = all
                     .iter()
                     .map(PathBuf::as_path)
                     .filter(|p| self.selects(p))
                     .collect();
                 Ok(layout.check(&selected, &all).len())
-            }
-            (Check::Layout(_), Example::Source(_)) => {
-                Err("layout examples are lists of paths, not code".into())
             }
             (check, Example::Source(src)) => {
                 let lang = check.language().expect("per-file checks have a language");
@@ -91,9 +102,53 @@ impl Law {
     }
 }
 
+/// Text that is only paths, one per line (no spaces, so not code).
+fn is_path_list(text: &str) -> bool {
+    let mut lines = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .peekable();
+    lines.peek().is_some()
+        && lines.all(|l| !l.contains(char::is_whitespace) && l.contains(['/', '.']))
+}
+
 fn show(e: &Example) -> String {
     match e {
         Example::Source(s) => s.clone(),
         Example::Files(f) => f.join(", "),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Law;
+
+    #[test]
+    fn a_layout_example_can_be_one_path() {
+        let law = Law::from_yaml(
+            r#"
+id: no-mod-rs
+kind: layout
+message: no mod.rs
+files: ["crates/**/mod.rs"]
+forbid: true
+examples:
+  valid: ["crates/editor/src/editor.rs", ["crates/vim/src/vim.rs", "crates/vim/src/normal.rs"]]
+  invalid: ["crates/vim/src/normal/mod.rs", "crates/a/src/a.rs\ncrates/a/src/b/mod.rs"]
+"#,
+        )
+        .unwrap();
+        let report = law.test_examples();
+        assert!(
+            report.failures.is_empty(),
+            "{:?}",
+            report
+                .failures
+                .iter()
+                .map(|f| &f.reason)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(report.passed, 4);
     }
 }

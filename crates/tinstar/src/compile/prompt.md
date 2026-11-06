@@ -16,9 +16,20 @@ empty lists.
 
 ## Answer
 
-One JSON object: `{"laws": [{"yaml": "<one law, as YAML text>"}], "not_checkable": [{"statement": "...", "reason": "..."}], "confirmed": []}`.
-Each `yaml` holds exactly one law file, as described below. `confirmed` stays empty unless tinstar
-asks about a law's hits in the project (see the end).
+One JSON object: `{"laws": [{...}, {...}], "not_checkable": [{"statement": "...", "reason": "..."}], "confirmed": []}`.
+Each item of `laws` is one law as a **JSON object**, with the fields of a law file described below
+(shown in YAML, the format tinstar saves them in; write the same keys and values as JSON). For
+example, the start of a pattern law:
+
+```json
+{"id": "no-console-log", "kind": "pattern", "language": "typescript",
+ "rule": {"pattern": "console.log($$$ARGS)"},
+ "examples": {"valid": ["logger.info(\"saved\");"], "invalid": ["console.log(\"saved\");"]}}
+```
+
+A key appears once per object: to combine several conditions use `all: [...]`, never two `has`.
+`constraints`, `utils`, `transform` and `fix` are keys of the law, next to `rule`, never inside it.
+`confirmed` stays empty unless tinstar asks about a law's hits in the project (see the end).
 
 ## A law file
 
@@ -62,7 +73,8 @@ ast-grep rules, in short:
 - `regex: ^number$` matches the node's text.
 - Relations: `has: {...}` (a child matches), `inside: {...}` (the parent matches). Add
   `stopBy: end` to search all descendants / ancestors instead of only the direct child / parent.
-  `has: { field: name, pattern: $NAME }` matches a child in a named field. Field names differ by
+  `has: { field: name, pattern: $NAME }` matches a child in a named field (`field` only goes inside
+  `has`/`inside`, never at the top of a rule). Field names differ by
   node kind (in TypeScript a variable_declarator's identifier is `name`, but a required_parameter's
   is `pattern`).
 - Composition: `all: [...]`, `any: [...]`, `not: {...}`.
