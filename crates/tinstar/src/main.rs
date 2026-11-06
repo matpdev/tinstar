@@ -2,6 +2,7 @@ mod compile;
 mod hook;
 mod init;
 mod lsp;
+mod mcp;
 mod output;
 
 use std::path::{Path, PathBuf};
@@ -78,6 +79,8 @@ enum Command {
     },
     /// Run the language server (stdio), for editors and agents.
     Lsp,
+    /// Run an MCP server (stdio): agents draft laws with their own model, tinstar checks them.
+    Mcp,
     /// Run as an agent hook: check the file the agent just edited and tell it what it broke.
     Hook {
         #[arg(value_enum)]
@@ -118,6 +121,10 @@ fn run() -> Result<ExitCode> {
             lsp::run()?;
             return Ok(ExitCode::SUCCESS);
         }
+        Command::Mcp => {
+            mcp::run(cli.root.clone())?;
+            return Ok(ExitCode::SUCCESS);
+        }
         Command::Hook { agent } => return hook::run(*agent),
         _ => {}
     }
@@ -134,7 +141,9 @@ fn run() -> Result<ExitCode> {
     report_load_errors(&errors);
 
     match cli.command {
-        Command::Init | Command::Lsp | Command::Hook { .. } => unreachable!("handled above"),
+        Command::Init | Command::Lsp | Command::Mcp | Command::Hook { .. } => {
+            unreachable!("handled above")
+        }
         Command::Compile {
             document,
             sections,

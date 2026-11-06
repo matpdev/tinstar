@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "tinstar": {
+      "command": "tinstar",
+      "args": ["mcp"]
+    }
+  }
+}

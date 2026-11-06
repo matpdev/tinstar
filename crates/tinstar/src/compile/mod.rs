@@ -12,8 +12,8 @@
 
 mod ledger;
 mod llm;
-mod noise;
-mod sections;
+pub(crate) mod noise;
+pub(crate) mod sections;
 mod strict_json;
 mod triage;
 
@@ -47,7 +47,7 @@ pub struct Options {
 
 const PROMPT: &str = include_str!("prompt.md");
 
-fn system_prompt() -> String {
+pub(crate) fn system_prompt() -> String {
     PROMPT
         .replace(
             "{{EXAMPLE_PATTERN}}",
@@ -112,7 +112,7 @@ struct Answer {
 /// A law as the LLM wrote it, as YAML text for the law file. Laws come as JSON objects: no YAML
 /// syntax to get wrong (unquoted colons, indentation), and tinstar writes the YAML. An object
 /// holding only `yaml` text (the older answer shape) is taken as it is.
-fn draft_yaml(law: &Value) -> Result<String, String> {
+pub(crate) fn draft_yaml(law: &Value) -> Result<String, String> {
     match law {
         Value::Object(m) if m.len() == 1 && m.get("yaml").is_some_and(Value::is_string) => {
             Ok(m["yaml"].as_str().unwrap_or_default().to_string())
@@ -134,14 +134,14 @@ struct Confirmed {
     reason: String,
 }
 
-struct Accepted {
-    id: String,
+pub(crate) struct Accepted {
+    pub id: String,
     /// Which answer it came in: 1 is right the first time, more means it was fixed from feedback.
-    attempt: usize,
-    yaml: String,
-    examples: usize,
-    hits: usize,
-    warnings: Vec<String>,
+    pub attempt: usize,
+    pub yaml: String,
+    pub examples: usize,
+    pub hits: usize,
+    pub warnings: Vec<String>,
     /// Why it was kept although it fires often (the LLM's answer to the noise check).
     confirmed: Option<String>,
 }
@@ -676,7 +676,7 @@ fn compile_section(ctx: &Ctx, section: &Section) -> Outcome {
             };
             let taken =
                 |id: &str| ctx.taken.contains(id) || out.accepted.iter().any(|a| a.id == id);
-            match validate(ctx, &draft, &source) {
+            match validate(ctx.root, ctx.files, &draft, &source) {
                 Ok((a, _)) if taken(&a.id) => failing.push(Rejected {
                     error: format!("the id `{}` is already used; choose another", a.id),
                     label,
@@ -792,7 +792,7 @@ fn noise_verdicts(
         };
         let narrowed = drafts[n]
             .clone()
-            .and_then(|yaml| validate(ctx, &yaml, source).map(|(v, _)| v));
+            .and_then(|yaml| validate(ctx.root, ctx.files, &yaml, source).map(|(v, _)| v));
         match narrowed {
             Ok(mut v) => {
                 if v.hits > ctx.noise_limit {
@@ -816,7 +816,12 @@ fn noise_verdicts(
 }
 
 /// Compiles a drafted law and runs it against its examples, then on the project (its hits).
-fn validate(ctx: &Ctx, yaml: &str, source: &str) -> Result<(Accepted, Vec<Diagnostic>), String> {
+pub(crate) fn validate(
+    root: &Path,
+    files: &[PathBuf],
+    yaml: &str,
+    source: &str,
+) -> Result<(Accepted, Vec<Diagnostic>), String> {
     let law = Law::from_yaml(yaml).map_err(|e| format!("does not load: {e}"))?;
     if law.source.as_deref() != Some(source) {
         return Err(format!("`source` must be `{source}`"));
@@ -842,14 +847,14 @@ fn validate(ctx: &Ctx, yaml: &str, source: &str) -> Result<(Accepted, Vec<Diagno
         return Err(e);
     }
     let mut warnings = Vec::new();
-    if !ctx.files.iter().any(|f| law.selects(f)) {
+    if !files.iter().any(|f| law.selects(f)) {
         warnings.push("its `files` globs select no file in the project today".into());
     }
     let id = law.id.clone();
-    let book = Lawbook::from_laws(ctx.root, vec![law]);
-    let refs: Vec<&PathBuf> = ctx.files.iter().collect();
+    let book = Lawbook::from_laws(root, vec![law]);
+    let refs: Vec<&PathBuf> = files.iter().collect();
     let mut hits = book.check_files(&refs);
-    hits.extend(book.check_layout(ctx.files));
+    hits.extend(book.check_layout(files));
     Ok((
         Accepted {
             id,
@@ -872,7 +877,7 @@ fn json_body(text: &str) -> &str {
     }
 }
 
-fn id_of(yaml: &str) -> Option<String> {
+pub(crate) fn id_of(yaml: &str) -> Option<String> {
     yaml.lines()
         .find_map(|l| l.strip_prefix("id:"))
         .map(|s| s.trim().trim_matches(['"', '\'']).to_string())
@@ -895,7 +900,7 @@ fn summary(error: &str) -> String {
     out
 }
 
-fn existing_pending(dir: &Path) -> Vec<String> {
+pub(crate) fn existing_pending(dir: &Path) -> Vec<String> {
     std::fs::read_dir(dir)
         .into_iter()
         .flatten()

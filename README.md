@@ -140,6 +140,7 @@ tinstar check --format json     # for tools
 tinstar laws                    # list the laws
 tinstar lsp                     # language server, over stdio
 tinstar hook claude-code        # agent hook (reads the tool call on stdin)
+tinstar mcp                     # MCP server, over stdio: agents draft laws with their own model
 ```
 
 ### In your editor
@@ -160,6 +161,31 @@ fix it, and the rule in plain language. The agent fixes it before going on.
   to your project's `.claude/settings.json` (a `PostToolUse` hook running `tinstar hook claude-code`).
   It reports errors and warnings in the edited file (and in its folder, for layout laws), and stays
   silent otherwise.
+
+### With your editor's own model (MCP)
+
+`tinstar compile` needs an API key. `tinstar mcp` doesn't: it is an MCP server, and the model you
+already use in your editor or agent (Copilot, DeepSeek, Claude, a local one) drafts the laws while
+tinstar checks them. Every law still has to pass its examples and the noise check before
+`tinstar_save_law` writes it to `.tinstar/laws/pending/`, whichever model wrote it.
+
+| Tool | What it does |
+|---|---|
+| `tinstar_sections` | How to work, the law format, a picture of the project, the document's sections |
+| `tinstar_check_law` | Compiles a drafted law, runs its examples and the noise check; saves nothing |
+| `tinstar_save_law` | Checks again and writes it to `pending/` (a noisy law needs `confirmed`) |
+| `tinstar_check` | Runs the approved laws on files: agents check their own work |
+
+Then ask the agent: *"Use tinstar to turn AGENTS.md into laws."*
+
+- **Zed:** add [`integrations/zed/settings.json`](integrations/zed/settings.json) to your settings
+  (`context_servers`).
+- **Claude Code:** `claude mcp add tinstar -- tinstar mcp`, or the project's
+  [`.mcp.json`](integrations/claude-code/.mcp.json).
+- **VS Code, Cursor and others:** a stdio server running `tinstar mcp`.
+
+Started outside the project, the tools take a `project` argument (an absolute path), or start the
+server with `tinstar --root /path/to/project mcp`.
 
 Exit status: `0` nothing broken, `1` a law with `severity: error` is broken, `2` a law file is invalid
 or the command failed. Files ignored by `.gitignore` are not checked.

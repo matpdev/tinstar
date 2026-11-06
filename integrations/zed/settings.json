@@ -1,0 +1,8 @@
+{
+  "context_servers": {
+    "tinstar": {
+      "command": "tinstar",
+      "args": ["mcp"]
+    }
+  }
+}
