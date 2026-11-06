@@ -85,7 +85,7 @@ pub fn reload(state: &mut State, conn: &Connection) {
             diagnostics::schedule(state, &key, Duration::ZERO);
         }
     }
-    diagnostics::request_layout(state);
+    diagnostics::request_project(state);
     log(
         conn,
         &format!(
@@ -174,7 +174,7 @@ pub fn did_change_watched_files(
     if laws_changed {
         reload(state, conn);
     } else if inside {
-        diagnostics::request_layout(state);
+        diagnostics::request_project(state);
     }
 }
 

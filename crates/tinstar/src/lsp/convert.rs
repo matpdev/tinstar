@@ -59,7 +59,11 @@ pub fn diagnostic(
     // Editors (Zed among them) don't show relatedInformation on hover, so the law itself goes in
     // the message too: it is what tells people and agents *why*.
     if let Some(s) = &d.statement {
-        let src = d.source.as_deref().map(|s| format!(" ({s})")).unwrap_or_default();
+        let src = d
+            .source
+            .as_deref()
+            .map(|s| format!(" ({s})"))
+            .unwrap_or_default();
         message.push_str(&format!("\nlaw: \"{s}\"{src}"));
     }
     let law_file = book

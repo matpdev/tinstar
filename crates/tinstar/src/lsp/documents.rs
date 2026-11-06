@@ -56,7 +56,7 @@ pub fn did_save(state: &mut State, conn: &Connection, p: DidSaveTextDocumentPara
     let key = p.text_document.uri.as_str().to_string();
     diagnostics::schedule(state, &key, Duration::ZERO);
     // A saved file may be new, renamed or the last one a folder was missing.
-    diagnostics::request_layout(state);
+    diagnostics::request_project(state);
 }
 
 pub fn did_close(state: &mut State, conn: &Connection, p: DidCloseTextDocumentParams) {

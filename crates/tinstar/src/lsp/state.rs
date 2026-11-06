@@ -34,8 +34,10 @@ pub struct State {
     /// Last results for open documents: (text hash, generation) → diagnostics, to skip rechecks.
     pub memo: HashMap<String, (u64, u64, Vec<tinstar_core::Diagnostic>)>,
 
-    /// What is shown, by source: per-file laws, layout laws, and problems in law files.
+    /// What is shown, by source: per-file laws on open documents, per-file laws on files as saved
+    /// (shown while they are closed), layout laws, and problems in law files.
     pub file_diags: HashMap<String, Vec<LspDiagnostic>>,
+    pub disk_diags: HashMap<String, Vec<LspDiagnostic>>,
     pub layout_diags: HashMap<String, Vec<LspDiagnostic>>,
     pub law_diags: HashMap<String, Vec<LspDiagnostic>>,
     /// URIs with diagnostics on screen, so they can be cleared.
@@ -56,6 +58,7 @@ impl State {
             due: HashMap::new(),
             memo: HashMap::new(),
             file_diags: HashMap::new(),
+            disk_diags: HashMap::new(),
             layout_diags: HashMap::new(),
             law_diags: HashMap::new(),
             published: HashSet::new(),

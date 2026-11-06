@@ -72,9 +72,12 @@ crates/tinstar/src/lsp/
 - `relatedInformation`: the law as written in plain language and where it lives (`AGENTS.md#money`);
 - `data`: the fix, if the law has one, so `codeAction` can offer it without checking again.
 
-Layout laws are about the project, not one file: they run on start, on save and when files are
-created or deleted (`workspace/didChangeWatchedFiles`), and their diagnostics are published on the
-offending file or, for a folder, on its first file (usually its index), where people work.
+The whole project is checked from disk on start, on save and when files are created or deleted
+(`workspace/didChangeWatchedFiles`), so problems show up in files nobody has opened (the editor's
+project diagnostics list them all). For a closed file the server shows the results for the file as
+saved; once it is opened, the results for the text in the editor take over. Layout laws are about
+the project, not one file: their diagnostics are published on the offending file or, for a folder,
+on its first file (usually its index), where people work.
 
 Law files get diagnostics of their own: while one is being typed it is compiled and run against its
 examples, so a typo, a bad rule or a wrong example is underlined in the YAML before it is saved.

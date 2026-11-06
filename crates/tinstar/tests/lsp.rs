@@ -12,6 +12,8 @@ struct Client {
     child: Child,
     stdin: ChildStdin,
     incoming: Receiver<Value>,
+    /// The last diagnostics received for each URI.
+    last: std::collections::HashMap<String, Value>,
     next_id: i64,
 }
 
@@ -54,6 +56,7 @@ impl Client {
             child,
             stdin,
             incoming,
+            last: Default::default(),
             next_id: 1,
         };
         let id = c.request(
@@ -100,6 +103,13 @@ impl Client {
                 let id = msg["id"].clone();
                 self.send(json!({ "jsonrpc": "2.0", "id": id, "result": null }));
             }
+            if msg["method"] == "textDocument/publishDiagnostics" {
+                let u = msg["params"]["uri"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
+                self.last.insert(u, msg.clone());
+            }
             if pred(&msg) {
                 return msg;
             }
@@ -120,6 +130,22 @@ impl Client {
                 && pred(m["params"]["diagnostics"].as_array().unwrap())
         });
         msg["params"]["diagnostics"].as_array().unwrap().clone()
+    }
+
+    /// Like `diagnostics_for`, but also accepts the last diagnostics already received for the file
+    /// (the server publishes many files at once, in any order).
+    fn current_diagnostics_for(
+        &mut self,
+        file: &Path,
+        pred: impl Fn(&[Value]) -> bool,
+    ) -> Vec<Value> {
+        if let Some(m) = self.last.get(&uri(file)) {
+            let d = m["params"]["diagnostics"].as_array().unwrap();
+            if pred(d) {
+                return d.clone();
+            }
+        }
+        self.diagnostics_for(file, pred)
     }
 
     fn open(&mut self, file: &Path, version: i64, text: &str) {
@@ -254,7 +280,7 @@ fn layout_laws_without_opening_anything() {
     let root = shop();
     let mut c = Client::start(&root);
     // A folder missing its test: shown on the folder's first file.
-    let d = c.diagnostics_for(&root.join("src/features/catalog/index.ts"), |d| {
+    let d = c.current_diagnostics_for(&root.join("src/features/catalog/index.ts"), |d| {
         !d.is_empty()
     });
     assert_eq!(codes(&d), ["feature-has-test"]);
@@ -264,8 +290,42 @@ fn layout_laws_without_opening_anything() {
             .unwrap()
             .contains("in src/features/catalog/")
     );
-    let d = c.diagnostics_for(&root.join(".env"), |d| !d.is_empty());
+    let d = c.current_diagnostics_for(&root.join(".env"), |d| !d.is_empty());
     assert_eq!(codes(&d), ["no-committed-env"]);
+}
+
+#[test]
+fn closed_files_show_their_saved_state() {
+    let root = shop();
+    let mut c = Client::start(&root);
+    // Per-file laws run on files nobody opened, with real positions.
+    let api = root.join("deploy/api.yaml");
+    let d = c.current_diagnostics_for(&api, |d| !d.is_empty());
+    let mut found = codes(&d);
+    found.sort();
+    found.dedup();
+    assert_eq!(found, ["k8s-pinned-images", "k8s-resource-limits"]);
+    assert!(
+        d.iter()
+            .any(|d| d["range"]["start"]["line"].as_u64() > Some(0))
+    );
+    let cart = root.join("src/cart.ts");
+    let d = c.current_diagnostics_for(&cart, |d| d.len() == 2);
+    assert_eq!(codes(&d), ["no-console-log", "no-float-money"]);
+
+    // Opened and edited, the editor's text wins; closed again, the file as saved is back.
+    let text = std::fs::read_to_string(&cart)
+        .unwrap()
+        .replace("console.log", "logger.info");
+    c.open(&cart, 1, &text);
+    let d = c.diagnostics_for(&cart, |d| d.len() == 1);
+    assert_eq!(codes(&d), ["no-float-money"]);
+    c.notify(
+        "textDocument/didClose",
+        json!({ "textDocument": { "uri": uri(&cart) } }),
+    );
+    let d = c.diagnostics_for(&cart, |d| d.len() == 2);
+    assert_eq!(codes(&d), ["no-console-log", "no-float-money"]);
 }
 
 #[test]

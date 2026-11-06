@@ -167,6 +167,20 @@ impl Lawbook {
         out
     }
 
+    /// Per-file laws on files read from disk (paths relative to the root). Files are independent,
+    /// so they are checked on every core; each worker reads, parses and checks one file at a time,
+    /// so memory stays at a few trees, not the whole repository.
+    pub fn check_files(&self, files: &[&PathBuf]) -> Vec<Diagnostic> {
+        files
+            .par_iter()
+            .filter(|rel| SupportLang::from_path(rel).is_some())
+            .flat_map_iter(|rel| match std::fs::read_to_string(self.root.join(rel)) {
+                Ok(text) => self.check_source(rel, &text),
+                Err(_) => Vec::new(),
+            })
+            .collect()
+    }
+
     /// Checks files on disk. With `targets`, per-file laws run on those files only and layout
     /// results are kept when they concern them (the file itself, or a folder that holds it).
     pub fn check_project(&self, targets: Option<&[PathBuf]>) -> Vec<Diagnostic> {
@@ -178,16 +192,7 @@ impl Lawbook {
                 .collect(),
             None => all.iter().collect(),
         };
-        // Files are independent: check them on every core. Each worker reads, parses and checks one
-        // file at a time, so memory stays at a few trees, not the whole repository.
-        let mut out: Vec<Diagnostic> = files
-            .par_iter()
-            .filter(|rel| SupportLang::from_path(rel).is_some())
-            .flat_map_iter(|rel| match std::fs::read_to_string(self.root.join(rel)) {
-                Ok(text) => self.check_source(rel, &text),
-                Err(_) => Vec::new(),
-            })
-            .collect();
+        let mut out = self.check_files(&files);
         let layout = self.check_layout(&all);
         out.extend(layout.into_iter().filter(|d| {
             match targets {

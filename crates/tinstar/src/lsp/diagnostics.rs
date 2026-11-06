@@ -33,9 +33,13 @@ pub enum Job {
         book: Arc<Lawbook>,
         generation: u64,
     },
-    /// Layout laws on the whole project (walks the files).
-    Layout { book: Arc<Lawbook>, generation: u64 },
+    /// The whole project from disk (walks the files): layout laws, and per-file laws on every
+    /// file, so problems show up in files nobody has opened.
+    Project { book: Arc<Lawbook>, generation: u64 },
 }
+
+/// A file's results from disk, with its text (for positions) when it could be read.
+pub type OnDisk = (PathBuf, Option<Arc<str>>, Vec<Diagnostic>);
 
 pub enum Done {
     File {
@@ -45,10 +49,12 @@ pub enum Done {
         text_hash: u64,
         diagnostics: Vec<Diagnostic>,
     },
-    Layout {
+    Project {
         generation: u64,
         files: Vec<PathBuf>,
-        diagnostics: Vec<Diagnostic>,
+        layout: Vec<Diagnostic>,
+        /// Per-file results, with the file's text (for positions) when there is something to show.
+        on_disk: Vec<OnDisk>,
     },
 }
 
@@ -76,13 +82,28 @@ pub fn spawn_workers(jobs: Receiver<Job>, done: Sender<Done>) {
                             version,
                             generation,
                         },
-                        Job::Layout { book, generation } => {
+                        Job::Project { book, generation } => {
                             let files = walk_files(&book.root);
-                            let diagnostics = book.check_layout(&files);
-                            Done::Layout {
+                            let layout = book.check_layout(&files);
+                            let refs: Vec<&PathBuf> = files.iter().collect();
+                            let mut by_file: HashMap<PathBuf, Vec<Diagnostic>> = HashMap::new();
+                            for d in book.check_files(&refs) {
+                                by_file.entry(d.path.clone()).or_default().push(d);
+                            }
+                            let on_disk = by_file
+                                .into_iter()
+                                .map(|(rel, diags)| {
+                                    let text = std::fs::read_to_string(book.root.join(&rel))
+                                        .ok()
+                                        .map(Arc::from);
+                                    (rel, text, diags)
+                                })
+                                .collect();
+                            Done::Project {
                                 generation,
                                 files,
-                                diagnostics,
+                                layout,
+                                on_disk,
                             }
                         }
                     };
@@ -156,9 +177,9 @@ pub fn dispatch_due(state: &mut State, conn: &Connection) {
     }
 }
 
-pub fn request_layout(state: &State) {
+pub fn request_project(state: &State) {
     if state.root.is_some() {
-        let _ = state.jobs.send(Job::Layout {
+        let _ = state.jobs.send(Job::Project {
             book: state.book.clone(),
             generation: state.generation,
         });
@@ -184,15 +205,17 @@ pub fn on_done(state: &mut State, conn: &Connection, done: Done) {
                 .insert(uri.clone(), (text_hash, generation, diagnostics.clone()));
             show_file(state, conn, &uri, &diagnostics);
         }
-        Done::Layout {
+        Done::Project {
             generation,
             files,
-            diagnostics,
+            layout,
+            on_disk,
         } => {
             if generation != state.generation {
                 return;
             }
-            show_layout(state, conn, &files, &diagnostics);
+            show_layout(state, conn, &files, &layout);
+            show_on_disk(state, conn, &on_disk);
         }
     }
 }
@@ -249,10 +272,45 @@ fn show_layout(
     }
 }
 
+/// Results for files as saved. They are shown for files that aren't open; an open file shows the
+/// results for its text in the editor instead.
+fn show_on_disk(state: &mut State, conn: &Connection, on_disk: &[OnDisk]) {
+    let Some(root) = state.root.clone() else {
+        return;
+    };
+    let mut by_uri: HashMap<String, Vec<LspDiagnostic>> = HashMap::new();
+    for (rel, text, diags) in on_disk {
+        let u = convert::uri_of(&root, rel).as_str().to_string();
+        let lsp = diags
+            .iter()
+            .map(|d| convert::diagnostic(d, text.as_deref(), &state.book, &state.sources))
+            .collect();
+        by_uri.insert(u, lsp);
+    }
+    let touched: HashSet<String> = state
+        .disk_diags
+        .keys()
+        .chain(by_uri.keys())
+        .cloned()
+        .collect();
+    state.disk_diags = by_uri;
+    for u in touched {
+        if !state.docs.contains_key(&u) {
+            publish(state, conn, &u);
+        }
+    }
+}
+
 /// Sends what is known for a URI: per-file, layout and law-file diagnostics together.
 pub fn publish(state: &mut State, conn: &Connection, uri_s: &str) {
     let mut all: Vec<LspDiagnostic> = Vec::new();
-    for map in [&state.file_diags, &state.layout_diags, &state.law_diags] {
+    // An open file: its text in the editor. A closed one: the file as saved.
+    let per_file = if state.docs.contains_key(uri_s) {
+        &state.file_diags
+    } else {
+        &state.disk_diags
+    };
+    for map in [per_file, &state.layout_diags, &state.law_diags] {
         if let Some(d) = map.get(uri_s) {
             all.extend(d.iter().cloned());
         }
