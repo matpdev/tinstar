@@ -56,6 +56,12 @@ pub fn diagnostic(
     if let Some(h) = &d.hint {
         message.push_str(&format!("\nhelp: {h}"));
     }
+    // Editors (Zed among them) don't show relatedInformation on hover, so the law itself goes in
+    // the message too: it is what tells people and agents *why*.
+    if let Some(s) = &d.statement {
+        let src = d.source.as_deref().map(|s| format!(" ({s})")).unwrap_or_default();
+        message.push_str(&format!("\nlaw: \"{s}\"{src}"));
+    }
     let law_file = book
         .law(&d.law)
         .and_then(|l| l.path.as_ref())
