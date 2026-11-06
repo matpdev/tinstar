@@ -33,8 +33,8 @@ error[feature-has-test] Feature folder is incomplete (missing `**/*.test.ts`)
 ✗ 8 error(s), 1 other(s), from 9 law(s)
 ```
 
-> **Status: early.** The engine, the CLI, the language server (Zed) and the Claude Code hook work.
-> Next: `tinstar compile`, which drafts laws from your `AGENTS.md` with an LLM, once.
+> **Status: early.** The engine, the CLI, `tinstar compile`, the language server (Zed) and the Claude
+> Code hook work.
 
 ## Laws
 
@@ -82,6 +82,33 @@ Some rules can't be checked from the code ("a discount never exceeds 30% of the 
 
 [`examples/shop`](examples/shop) is a small project with an `AGENTS.md`, nine laws and one planted
 violation of each.
+
+## From AGENTS.md to laws
+
+```sh
+tinstar compile                 # every section of AGENTS.md (or: tinstar compile docs/RULES.md)
+tinstar compile --section money # one section
+tinstar approve --all           # after reviewing .tinstar/laws/pending/
+```
+
+`tinstar compile` sends each section of the document, with a picture of the project, to an LLM and asks
+for laws. Every law that comes back is compiled and run against its own examples; a law that doesn't
+load or gets an example wrong goes back to the LLM with the error (`--attempts`, 3 by default). Only
+laws that pass are written, to `.tinstar/laws/pending/`, where nothing is enforced until a person
+approves them. Rules that can't be checked from the code are listed and stay in the document.
+
+```console
+## Money (AGENTS.md#money)
+  ✓ money-is-cents: 4 example(s) pass, 1 hit(s) in the project, fixed from feedback (answer 2)
+
+## Things a checker can't see (AGENTS.md#things-a-checker-cant-see)
+  · stays in AGENTS.md: "Discounts never exceed 30% of the order total." (depends on values at runtime)
+```
+
+Tokens are spent here, once; checking costs nothing afterwards. The provider is the first of
+`DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` that is set, or `--provider`
+(`anthropic`, `deepseek`, `openai`, or `compatible --base-url … --model …` for a local server such as
+Ollama).
 
 ## Use
 

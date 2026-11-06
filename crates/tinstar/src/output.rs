@@ -185,6 +185,17 @@ pub fn laws(book: &Lawbook) {
         }
     }
     println!("{} law(s)", book.laws.len());
+    let pending = book.root.join(tinstar_core::LAWS_DIR).join("pending");
+    let n = std::fs::read_dir(&pending).map(|d| d.count()).unwrap_or(0);
+    if n > 0 {
+        println!(
+            "{n} pending in {} (review, then `tinstar approve`)",
+            pending
+                .strip_prefix(&book.root)
+                .unwrap_or(&pending)
+                .display()
+        );
+    }
 }
 
 /// Returns whether every law passed its examples.

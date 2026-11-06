@@ -1,3 +1,4 @@
+mod compile;
 mod hook;
 mod init;
 mod lsp;
@@ -39,6 +40,32 @@ enum Command {
     Test,
     /// List the laws.
     Laws,
+    /// Draft laws from a rules document with an LLM (once); they land in .tinstar/laws/pending/.
+    Compile {
+        /// The rules document, relative to the project root.
+        #[arg(default_value = "AGENTS.md")]
+        document: PathBuf,
+        /// Only these sections (heading text or anchor); repeatable.
+        #[arg(long = "section")]
+        sections: Vec<String>,
+        /// How many times a failing law goes back to the LLM with its error.
+        #[arg(long, default_value_t = 3)]
+        attempts: usize,
+        /// LLM provider (default: the first of DEEPSEEK_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY set).
+        #[arg(long, value_enum)]
+        provider: Option<compile::Provider>,
+        #[arg(long)]
+        model: Option<String>,
+        /// API base URL (for --provider compatible: e.g. http://localhost:11434/v1 for Ollama).
+        #[arg(long)]
+        base_url: Option<String>,
+    },
+    /// Move reviewed laws from .tinstar/laws/pending/ into the lawbook.
+    Approve {
+        ids: Vec<String>,
+        #[arg(long, conflicts_with = "ids")]
+        all: bool,
+    },
     /// Run the language server (stdio), for editors and agents.
     Lsp,
     /// Run as an agent hook: check the file the agent just edited and tell it what it broke.
@@ -98,6 +125,25 @@ fn run() -> Result<ExitCode> {
 
     match cli.command {
         Command::Init | Command::Lsp | Command::Hook { .. } => unreachable!("handled above"),
+        Command::Compile {
+            document,
+            sections,
+            attempts,
+            provider,
+            model,
+            base_url,
+        } => compile::run(
+            &root,
+            compile::Options {
+                document,
+                sections,
+                attempts,
+                provider,
+                model,
+                base_url,
+            },
+        ),
+        Command::Approve { ids, all } => compile::approve(&root, &ids, all),
         Command::Laws => {
             output::laws(&book);
             Ok(exit_for_load(&errors))
