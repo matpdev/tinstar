@@ -13,6 +13,7 @@ files:
 - src/**
 rule:
   pattern: console.log($$$ARGS)
+fix: logger.info($$$ARGS)
 examples:
   valid:
   - logger.info("total", total.cents);

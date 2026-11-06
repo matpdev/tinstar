@@ -61,7 +61,8 @@ language: typescript   # typescript, tsx, javascript, python, rust, go, java, ko
                        # ruby, php, swift, scala, lua, elixir, dart, bash, yaml, json, hcl, html, css
 rule: { ... }          # an ast-grep rule
 constraints: { ... }   # optional: { VAR: { regex: ... } } filters on metavariables
-fix: ...               # optional: replacement text, may use $VARS (only when the fix is mechanical)
+fix: ...               # replacement text, may use $VARS: add it whenever the hint is a mechanical
+                       # rewrite (one call for another, a type for another); editors offer it as a quick fix
 ```
 
 ast-grep rules, in short:

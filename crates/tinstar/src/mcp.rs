@@ -205,6 +205,9 @@ impl Server {
         for w in &law.warnings {
             out.push_str(&format!("Warning: {w}\n"));
         }
+        if let Some(tip) = fix_tip(&yaml) {
+            out.push_str(tip);
+        }
         if law.hits > NOISE_LIMIT {
             out.push_str(&format!(
                 "\nNOISY: it fires more than {NOISE_LIMIT} times.\n{}\n\n{}",
@@ -319,6 +322,17 @@ impl Server {
 /// A path relative to the root (agents often pass absolute paths).
 fn relative(root: &Path, p: &Path) -> PathBuf {
     p.strip_prefix(root).unwrap_or(p).to_path_buf()
+}
+
+/// A pattern law without `fix`: editors can't offer a quick fix, so remind the agent once.
+fn fix_tip(yaml: &str) -> Option<&'static str> {
+    let law: serde_yaml::Value = serde_yaml::from_str(yaml).ok()?;
+    let pattern = law.get("kind").and_then(|k| k.as_str()) == Some("pattern");
+    (pattern && law.get("fix").is_none()).then_some(
+        "Tip: it has no `fix`. If the correct code is a mechanical rewrite of what it catches \
+         (one call for another, e.g. `fix: logger.info($$$ARGS)`), add one: editors offer it as \
+         a quick fix.\n",
+    )
 }
 
 /// The law (a JSON object, or YAML text) and its source, from a tool call.
