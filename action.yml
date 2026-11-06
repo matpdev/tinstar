@@ -1,0 +1,62 @@
+name: tinstar
+description: Check a repository against its laws (the rules in AGENTS.md, compiled into checks). No LLM, no API key.
+author: matpdev
+branding:
+  icon: shield
+  color: yellow
+
+inputs:
+  paths:
+    description: Files or folders to check, separated by spaces (default, the whole project).
+    default: ""
+  root:
+    description: Project root, the folder with .tinstar/ (default, the repository).
+    default: "."
+  version:
+    description: tinstar release to install, such as v0.1.0 (default, the latest).
+    default: latest
+  annotations:
+    description: Show each broken law on the changed lines of the pull request.
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Install tinstar
+      shell: bash
+      env:
+        TINSTAR_VERSION: ${{ inputs.version }}
+        TINSTAR_INSTALL_DIR: ${{ runner.temp }}/tinstar-bin
+      run: |
+        if [ "$RUNNER_OS" = Windows ]; then
+          pwsh -NoProfile -File "$GITHUB_ACTION_PATH/install.ps1"
+        else
+          sh "$GITHUB_ACTION_PATH/install.sh"
+        fi
+        echo "$TINSTAR_INSTALL_DIR" >> "$GITHUB_PATH"
+
+    - name: Check the laws
+      shell: bash
+      working-directory: ${{ inputs.root }}
+      env:
+        PATHS: ${{ inputs.paths }}
+        ANNOTATIONS: ${{ inputs.annotations }}
+      run: |
+        # shellcheck disable=SC2086 # paths are split on purpose
+        status=0
+        tinstar check $PATHS || status=$?
+        if [ "$ANNOTATIONS" = true ] && [ "$status" != 2 ]; then
+          prefix="$(realpath --relative-to="$GITHUB_WORKSPACE" . 2>/dev/null || echo .)"
+          tinstar check --format json $PATHS 2>/dev/null | jq -r --arg prefix "$prefix" '
+            def esc: gsub("%"; "%25") | gsub("\r"; "%0D") | gsub("\n"; "%0A");
+            def prop: esc | gsub(":"; "%3A") | gsub(","; "%2C");
+            .diagnostics[]
+            | (if .severity == "error" then "error" elif .severity == "warning" then "warning" else "notice" end) as $level
+            | (if $prefix == "." then .path else "\($prefix)/\(.path)" end) as $file
+            | "::\($level) file=\($file | prop)"
+              + (if .span then ",line=\(.span.line),col=\(.span.column),endLine=\(.span.end_line),endColumn=\(.span.end_column)" else "" end)
+              + ",title=\("tinstar " + .law | prop)::"
+              + ("\(.message)\nlaw: \"\(.statement)\" (\(.source // "-"))" + (if .hint then "\nhelp: \(.hint)" else "" end) | esc)
+          ' || true
+        fi
+        exit "$status"

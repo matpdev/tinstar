@@ -40,7 +40,7 @@ error[feature-has-test] Feature folder is incomplete (missing `**/*.test.ts`)
 ```
 
 > **Status: early.** The engine, the CLI, `tinstar compile`, the MCP server, the language server
-> (Zed) and the Claude Code hook work.
+> (Zed), the Claude Code hook and the GitHub Action work.
 
 ## Laws
 
@@ -131,11 +131,25 @@ Tokens are spent here, once; checking costs nothing afterwards. The provider is 
 (`anthropic`, `deepseek`, `openai`, or `compatible --base-url … --model …` for a local server such as
 Ollama).
 
+## Install
+
+```sh
+# Linux and macOS (x86_64, arm64): to ~/.local/bin
+curl -fsSL https://raw.githubusercontent.com/matpdev/tinstar/main/install.sh | sh
+
+# Windows (PowerShell): to %LOCALAPPDATA%\tinstar\bin, added to PATH
+irm https://raw.githubusercontent.com/matpdev/tinstar/main/install.ps1 | iex
+
+# From source (Rust 1.85+)
+cargo install --git https://github.com/matpdev/tinstar tinstar
+```
+
+The scripts download a binary from the [releases](https://github.com/matpdev/tinstar/releases) and
+check its SHA-256. `TINSTAR_VERSION=v0.1.0` pins a release; `TINSTAR_INSTALL_DIR` picks the folder.
+
 ## Use
 
 ```sh
-cargo install --git https://github.com/matpdev/tinstar tinstar   # or, in a clone: cargo install --path crates/tinstar
-
 tinstar init                    # .tinstar/laws/ with an example law
 tinstar test                    # every law against its own examples
 tinstar check                   # the whole project
@@ -195,6 +209,27 @@ Then ask the agent: *"Use tinstar to turn AGENTS.md into laws."*
 
 Started outside the project, the tools take a `project` argument (an absolute path), or start the
 server with `tinstar --root /path/to/project mcp`.
+
+### In CI (GitHub Actions)
+
+```yaml
+# .github/workflows/tinstar.yml
+name: tinstar
+on: [push, pull_request]
+jobs:
+  laws:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: matpdev/tinstar@v0.1.0
+        # with:
+        #   paths: src deploy     # default: the whole project
+        #   root: services/api    # the folder with .tinstar/
+```
+
+The job fails when a law with `severity: error` is broken, and each problem is shown on its line in
+the pull request, with the rule it comes from. No LLM and no API key: the laws are already in the
+repository.
 
 Exit status: `0` nothing broken, `1` a law with `severity: error` is broken, `2` a law file is invalid
 or the command failed. Files ignored by `.gitignore` are not checked.
