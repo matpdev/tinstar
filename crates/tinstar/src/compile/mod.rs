@@ -17,7 +17,7 @@ mod sections;
 mod strict_json;
 mod triage;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Mutex;
@@ -304,7 +304,7 @@ pub fn run(root: &Path, opts: Options) -> Result<ExitCode> {
     // 4. Write what passed, and report, in the document's order.
     std::fs::create_dir_all(&pending_dir)?;
     let mut written = Vec::new();
-    let (mut rejected, mut unchanged, mut set_aside) = (0, 0, 0);
+    let (mut rejected, mut unchanged, mut set_aside, mut noisy_laws) = (0, 0, 0, 0);
     let mut written_ids = taken.clone();
     let mut failed = false;
     for (i, section) in sections.iter().enumerate() {
@@ -350,7 +350,13 @@ pub fn run(root: &Path, opts: Options) -> Result<ExitCode> {
             println!("  ✗ {e}");
         }
         let mut section_laws = Vec::new();
-        for a in &outcome.accepted {
+        // A law the noise check couldn't settle (still noisy, not confirmed) is not something to
+        // approve in bulk: it goes with the drafts a person has to look at.
+        let (clean, noisy): (Vec<&Accepted>, Vec<&Accepted>) = outcome
+            .accepted
+            .iter()
+            .partition(|a| a.hits <= opts.noise_limit || a.confirmed.is_some());
+        for a in clean {
             let mut id = a.id.clone();
             let mut n = 2;
             // Two sections running at once may pick the same id.
@@ -394,17 +400,32 @@ pub fn run(root: &Path, opts: Options) -> Result<ExitCode> {
             section_laws.push(id.clone());
             written.push(id);
         }
-        for a in &outcome.dropped {
+        let set_aside_laws = outcome
+            .dropped
+            .iter()
+            .map(|a| (a, "the LLM dropped it after the noise check"))
+            .chain(
+                noisy
+                    .into_iter()
+                    .map(|a| (a, "the noise check couldn't narrow it")),
+            );
+        for (a, why) in set_aside_laws {
+            noisy_laws += 1;
             let dir = pending_dir.join("rejected");
             std::fs::create_dir_all(&dir)?;
             let path = dir.join(format!("{}.yaml", a.id));
+            let warnings: String = a
+                .warnings
+                .iter()
+                .map(|w| format!("# Warning: {w}\n"))
+                .collect();
             std::fs::write(
                 &path,
                 format!(
                     "# Drafted by `tinstar compile` from {doc_name}#{} with {}. It passes its\n\
-                     # {} example(s) but fires {} time(s) in the project, and the LLM dropped it after\n\
-                     # the noise check. Keep it (maybe as `severity: warning`) by moving it to\n\
-                     # .tinstar/laws/, or delete it.\n{}\n",
+                     # {} example(s) but fires {} time(s) in the project, and {why}.\n\
+                     # Keep it (maybe as `severity: warning`) by moving it to .tinstar/laws/, or\n\
+                     # delete it.\n{warnings}{}\n",
                     section.anchor,
                     llm.describe(),
                     a.examples,
@@ -413,7 +434,7 @@ pub fn run(root: &Path, opts: Options) -> Result<ExitCode> {
                 ),
             )?;
             println!(
-                "  ~ {}: dropped after the noise check (it fired {} time(s))\n    draft kept in {}",
+                "  ~ {}: set aside, {why} (it fires {} time(s))\n    draft kept in {}",
                 a.id,
                 a.hits,
                 path.strip_prefix(root).unwrap_or(&path).display()
@@ -481,13 +502,14 @@ pub fn run(root: &Path, opts: Options) -> Result<ExitCode> {
     ledger.save(root)?;
 
     println!(
-        "\n{} law(s) drafted in {}, {} rejected; {} section(s) unchanged, {} set aside by the triage.",
+        "\n{} law(s) drafted in {}, {} rejected, {} set aside by the noise check; {} section(s) unchanged, {} set aside by the triage.",
         written.len(),
         pending_dir
             .strip_prefix(root)
             .unwrap_or(&pending_dir)
             .display(),
         rejected,
+        noisy_laws,
         unchanged,
         set_aside,
     );
@@ -555,6 +577,9 @@ fn compile_section(ctx: &Ctx, section: &Section) -> Outcome {
     let mut reviewed: HashSet<String> = HashSet::new();
     // Laws still failing after the last regular answer.
     let mut rejected: Vec<Rejected> = Vec::new();
+    // The last error of each failing law: the same error twice in a row means the LLM is stuck on
+    // it, and asking again would resend the whole conversation for nothing.
+    let mut last_error: HashMap<String, String> = HashMap::new();
 
     // `attempts` answers to get laws right, plus one more, only for the noise check, when laws
     // that passed on the last answer still wait for it.
@@ -676,6 +701,21 @@ fn compile_section(ctx: &Ctx, section: &Section) -> Outcome {
                 }),
             }
         }
+        let (stuck, still): (Vec<Rejected>, Vec<Rejected>) =
+            std::mem::take(&mut failing).into_iter().partition(|r| {
+                let sig = summary(&r.error);
+                last_error.insert(r.label.clone(), sig.clone()).as_ref() == Some(&sig)
+            });
+        failing = still;
+        rejected.extend(stuck.into_iter().map(|r| {
+            let (first, rest) = r.error.split_once('\n').unwrap_or((&r.error, ""));
+            Rejected {
+                error: format!(
+                    "{first} (the same error twice in a row, so tinstar stopped asking)\n{rest}"
+                ),
+                ..r
+            }
+        }));
         if failing.is_empty() && held.is_empty() {
             break;
         }

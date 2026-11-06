@@ -1,0 +1,20 @@
+{
+ "money": [
+  {
+   "laws": [
+    {
+     "yaml": "id: money-is-cents\nstatement: Money is always an integer number of cents (the Money type), never a floating point number.\nsource: AGENTS.md#money\nmessage: \"`$NAME` holds money: type it as Money\"\nhint: Use the Money type and Money.cents(...).\nlanguage: typescript\nfiles: [\"src/**\"]\nrule:\n  kind: type_annotation\n  has: { kind: predefined_type, regex: ^number$ }\n  inside:\n    any:\n      - kind: variable_declarator\n        has: { field: name, pattern: $NAME }\n      - kind: required_parameter\n        has: { field: pattern, pattern: $NAME }\nconstraints:\n  NAME: { regex: (?i)(price|total|amount|cost|discount) }\nexamples:\n  valid:\n    - \"const total: Money = Money.cents(0);\"\n    - \"let quantity: number = 3;\"\n  invalid:\n    - \"let price: number = 9.99;\"\n    - \"function refund(amount: number) {}\"\n"
+    }
+   ],
+   "not_checkable": []
+  },
+  {
+   "laws": [
+    {
+     "yaml": "id: money-is-cents\nstatement: Money is always an integer number of cents (the Money type), never a floating point number.\nsource: AGENTS.md#money\nmessage: \"`$NAME` holds money: type it as Money\"\nhint: Use the Money type and Money.cents(...).\nlanguage: typescript\nfiles: [\"src/**\"]\nrule:\n  kind: type_annotation\n  has: { kind: predefined_type, regex: ^number$ }\n  inside:\n    any:\n      - kind: variable_declarator\n        has: { field: name, pattern: $NAME }\n      - kind: required_parameter\n        has: { field: name, pattern: $NAME }\nconstraints:\n  NAME: { regex: (?i)(price|total|amount|cost|discount) }\nexamples:\n  valid:\n    - \"const total: Money = Money.cents(0);\"\n    - \"let quantity: number = 3;\"\n  invalid:\n    - \"let price: number = 9.99;\"\n    - \"function refund(amount: number) {}\"\n"
+    }
+   ],
+   "not_checkable": []
+  }
+ ]
+}

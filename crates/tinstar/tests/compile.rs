@@ -209,3 +209,54 @@ fn the_noise_check_has_a_round_of_its_own() {
     );
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// A law that comes back with the same error twice is not asked for a third time (the replay
+/// holds two answers: a third call would fail the run).
+#[test]
+fn stops_asking_when_the_same_error_repeats() {
+    let dir = fresh_shop("stuck");
+    let (code, out) = tinstar_with(
+        &dir,
+        "compile-stuck-replay.json",
+        &["compile", "--section", "money", "--attempts", "3"],
+    );
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("✗ money-is-cents: rejected after 2 answer(s): gets its own examples wrong: (the same error twice in a row, so tinstar stopped asking)"),
+        "{out}"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A law the noise check couldn't settle (its narrower version broke, and the LLM didn't confirm
+/// the hits) is set aside with the rejected drafts, not offered for approval.
+#[test]
+fn unsettled_noisy_laws_are_set_aside() {
+    let dir = fresh_shop("noisy");
+    let args = [
+        "compile",
+        "--section",
+        "money",
+        "--attempts",
+        "1",
+        "--noise-limit",
+        "0",
+    ];
+    let (code, out) = tinstar_with(&dir, "compile-noisy-replay.json", &args);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("~ money-is-cents: set aside, the noise check couldn't narrow it"),
+        "{out}"
+    );
+    assert!(out.contains("0 law(s) drafted"), "{out}");
+    assert!(out.contains("1 set aside by the noise check"), "{out}");
+    let kept =
+        std::fs::read_to_string(dir.join(".tinstar/laws/pending/rejected/money-is-cents.yaml"))
+            .unwrap();
+    assert!(kept.contains("# Warning: fires 1 times"), "{kept}");
+    assert!(
+        !dir.join(".tinstar/laws/pending/money-is-cents.yaml")
+            .exists()
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}

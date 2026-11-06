@@ -95,11 +95,13 @@ tinstar approve --all           # after reviewing .tinstar/laws/pending/
 for laws. Every law that comes back is checked twice before anyone sees it:
 
 - **against its own examples**: a law that doesn't load or gets an example wrong goes back to the
-  LLM with the error (`--attempts`, 3 by default);
+  LLM with the error (`--attempts`, 3 by default; a law that comes back with the same error twice
+  isn't asked for again);
 - **against the project** (the noise check): a law that fires more than `--noise-limit` times (25)
   in a project that mostly follows its own rules is probably broader than the rule. It goes back
   with the numbers (how many hits are in test code, in which folders) and a sample of the code it
-  caught, to be narrowed, confirmed, or left to the document.
+  caught, to be narrowed, confirmed, or left to the document. A law it can't settle is set aside
+  with the rejected drafts, never offered for approval.
 
 Only laws that pass are written, to `.tinstar/laws/pending/`, where nothing is enforced until a
 person approves them; drafts that never pass are kept in `pending/rejected/` with their last error.
