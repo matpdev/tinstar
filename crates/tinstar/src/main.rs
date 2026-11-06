@@ -99,6 +99,13 @@ pub enum Format {
 }
 
 fn main() -> ExitCode {
+    // `tinstar laws | head`: when the reader goes away, stop quietly like other Unix tools, instead
+    // of panicking on the next write. The servers (lsp, mcp) never write to a closed pipe on purpose.
+    #[cfg(unix)]
+    // SAFETY: called first thing, before any thread starts; it only resets a signal disposition.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     match run() {
         Ok(code) => code,
         Err(e) => {

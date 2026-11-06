@@ -14,3 +14,6 @@ serde_json = { version = "1.0.154", features = ["preserve_order"] }
 serde_yaml = "0.9.34"
 tinstar-core = { version = "0.1.0", path = "../tinstar-core" }
 ureq = { version = "3.5.1", features = ["json"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.191"
