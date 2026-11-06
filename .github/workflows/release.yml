@@ -1,10 +1,14 @@
 name: Release
 
-# Push a tag like v0.1.0: the binaries are built for every platform and attached to a GitHub
-# release, where install.sh / install.ps1 and the GitHub Action download them from.
+# Bump `version` in Cargo.toml and push to main: this workflow tags the commit `v<version>`, builds
+# the binaries for every platform and attaches them to a GitHub release, where install.sh,
+# install.ps1 and the GitHub Action download them. A tag pushed by hand (v*) does the same.
 on:
   push:
+    branches: [main]
+    paths: [Cargo.toml, .github/workflows/release.yml]
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -15,17 +19,40 @@ env:
 jobs:
   create:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Create the release
+      - name: Pick the tag
+        id: tag
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 ||
-            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)"
+            [ -n "$version" ] || { echo "no version in Cargo.toml" >&2; exit 1; }
+            tag="v$version"
+            if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+              echo "$tag already exists: nothing to release."
+              exit 0
+            fi
+            gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$tag" -f sha="$GITHUB_SHA"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Create the release
+        if: steps.tag.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 ||
+            gh release create "$TAG" --title "$TAG" --generate-notes --verify-tag
 
   build:
     needs: create
+    if: needs.create.outputs.tag != ''
     name: ${{ matrix.target }}
     strategy:
       fail-fast: false
@@ -39,6 +66,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.create.outputs.tag }}
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: stable
@@ -69,4 +98,5 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$GITHUB_REF_NAME" "$ASSET" "$ASSET.sha256" --clobber
+          TAG: ${{ needs.create.outputs.tag }}
+        run: gh release upload "$TAG" "$ASSET" "$ASSET.sha256" --clobber
