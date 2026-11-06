@@ -134,7 +134,7 @@ Ollama).
 ## Use
 
 ```sh
-cargo install --path crates/tinstar
+cargo install --git https://github.com/matpdev/tinstar tinstar   # or, in a clone: cargo install --path crates/tinstar
 
 tinstar init                    # .tinstar/laws/ with an example law
 tinstar test                    # every law against its own examples
@@ -154,6 +154,9 @@ tinstar mcp                     # MCP server, over stdio: agents draft laws with
 `tinstar lsp` is a language server: broken laws show up as you type, with the plain-language law next
 to them and a quick fix when the law has one. Law files are checked as you write them: a typo, a bad
 rule or an example the law gets wrong is underlined in the YAML itself.
+
+![tinstar in Zed: a hover with the law a line breaks, the quick fix for console.log, and every
+problem in the project, from code to Kubernetes and CI](docs/demo/tinstar-zed.gif)
 
 - **Zed:** install the binary, then *zed: install dev extension* and pick [`editors/zed`](editors/zed).
 - **Any other editor:** run `tinstar lsp` over stdio for the languages you use.
