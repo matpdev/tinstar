@@ -69,7 +69,20 @@ fn console_law(id: &str) -> Value {
     .unwrap();
     let mut law: Value = serde_yaml::from_str(&yaml).unwrap();
     law["id"] = json!(id);
-    law
+    sorted(law)
+}
+
+/// Keys sorted alphabetically, as some MCP clients send them.
+fn sorted(v: Value) -> Value {
+    match v {
+        Value::Object(m) => {
+            let mut entries: Vec<(String, Value)> = m.into_iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            Value::Object(entries.into_iter().map(|(k, v)| (k, sorted(v))).collect())
+        }
+        Value::Array(a) => Value::Array(a.into_iter().map(sorted).collect()),
+        other => other,
+    }
 }
 
 #[test]
@@ -159,6 +172,10 @@ fn drafts_checks_saves_and_checks_code() {
         saved.starts_with("# Drafted through `tinstar mcp` by test-client from AGENTS.md#logging.")
     );
     assert!(saved.contains("\nid: logs-through-logger\n"), "{saved}");
+    // Saved in reading order, whatever order the client sent (here: sorted, as some clients do).
+    let id_at = saved.find("\nid:").unwrap();
+    let examples_at = saved.find("\nexamples:").unwrap();
+    assert!(id_at < examples_at, "{saved}");
 
     // An id the project already uses for an approved law is refused.
     assert_eq!(by_id(7)["result"]["isError"], true);

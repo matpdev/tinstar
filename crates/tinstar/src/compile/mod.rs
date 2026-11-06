@@ -117,7 +117,7 @@ pub(crate) fn draft_yaml(law: &Value) -> Result<String, String> {
         Value::Object(m) if m.len() == 1 && m.get("yaml").is_some_and(Value::is_string) => {
             Ok(m["yaml"].as_str().unwrap_or_default().to_string())
         }
-        Value::Object(_) => serde_yaml::to_string(law).map_err(|e| e.to_string()),
+        Value::Object(_) => serde_yaml::to_string(&reading_order(law)).map_err(|e| e.to_string()),
         _ => Err("each item of `laws` must be a JSON object (one law)".into()),
     }
 }
@@ -867,6 +867,61 @@ pub(crate) fn validate(
         },
         hits,
     ))
+}
+
+/// Keys in the order people read a law: what it is, what it says, where it applies, how it checks,
+/// examples last; in a rule, what to match before its relations. Clients may send keys in any order
+/// (some sort them), so the saved file doesn't depend on it. Keys not listed keep their order, after.
+fn reading_order(v: &Value) -> Value {
+    const ORDER: &[&str] = &[
+        "id",
+        "kind",
+        "statement",
+        "source",
+        "message",
+        "hint",
+        "severity",
+        "language",
+        "files",
+        "ignores",
+        "match",
+        "assert",
+        "forbid",
+        "name_matches",
+        "each_dir",
+        "require",
+        "path",
+        "exists",
+        "equals",
+        "one_of",
+        "matches",
+        "not_matches",
+        "rule",
+        "pattern",
+        "field",
+        "regex",
+        "constraints",
+        "utils",
+        "transform",
+        "fix",
+        "examples",
+        "valid",
+        "invalid",
+    ];
+    match v {
+        Value::Object(m) => {
+            let rank = |k: &str| ORDER.iter().position(|o| *o == k).unwrap_or(ORDER.len());
+            let mut keys: Vec<&String> = m.keys().collect();
+            keys.sort_by_key(|k| rank(k)); // stable: unlisted keys keep their order
+            Value::Object(
+                keys.into_iter()
+                    .map(|k| (k.clone(), reading_order(&m[k])))
+                    .collect(),
+            )
+        }
+        Value::Array(a) => Value::Array(a.iter().map(reading_order).collect()),
+        other => other.clone(),
+    }
 }
 
 /// The JSON object in an answer, without a Markdown fence or words around it.
