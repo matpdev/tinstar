@@ -14,6 +14,42 @@ pub(crate) struct PatternCheck {
     rule: RuleConfig<SupportLang>,
 }
 
+/// `$NAME`, `$$$NAME` in rule text.
+fn vars(text: &str) -> std::collections::BTreeSet<String> {
+    static RE: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"\$+([A-Z_][A-Z0-9_]*)").expect("regex"));
+    RE.captures_iter(text).map(|c| c[1].to_string()).collect()
+}
+
+/// A `$VAR` in the message or the fix that the rule never captures would print as nothing
+/// ("call to ``"), so it is an error.
+fn undefined_vars(file: &LawFile, rule: &Value) -> Result<(), LawError> {
+    let text = |v: &Value| serde_yaml::to_string(v).unwrap_or_default();
+    let mut defined = vars(&text(rule));
+    if let Some(u) = &file.utils {
+        defined.extend(vars(&text(u)));
+    }
+    if let Some(Value::Mapping(t)) = &file.transform {
+        defined.extend(t.keys().filter_map(Value::as_str).map(str::to_string));
+    }
+    let mut used = vars(&file.message);
+    if let Some(f) = &file.fix {
+        used.extend(vars(&text(f)));
+    }
+    let missing: Vec<String> = used
+        .difference(&defined)
+        .map(|v| format!("`${v}`"))
+        .collect();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        invalid(format!(
+            "{} used in `message` or `fix` but never captured by `rule`",
+            missing.join(", ")
+        ))
+    }
+}
+
 impl PatternCheck {
     pub fn compile(file: &LawFile) -> Result<Self, LawError> {
         let Some(language) = &file.language else {
@@ -46,6 +82,7 @@ impl PatternCheck {
                 put(key, v.clone());
             }
         }
+        undefined_vars(file, rule)?;
         let yaml = serde_yaml::to_string(&map)?;
         let config: SerializableRuleConfig<SupportLang> =
             ast_grep_config::from_str(&yaml).or_else(|e| invalid(format!("ast-grep rule: {e}")))?;
@@ -75,5 +112,23 @@ impl PatternCheck {
                 }
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Law;
+
+    fn law(message: &str) -> Result<Law, crate::LawError> {
+        Law::from_yaml(&format!(
+            "id: x\nlanguage: typescript\nmessage: \"{message}\"\nrule: {{ pattern: fetch($URL) }}\n"
+        ))
+    }
+
+    #[test]
+    fn message_vars_must_be_captured() {
+        assert!(law("call to $URL").is_ok());
+        let e = law("call to $HOST").err().expect("an error").to_string();
+        assert!(e.contains("`$HOST`"), "{e}");
     }
 }

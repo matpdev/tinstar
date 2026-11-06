@@ -98,9 +98,24 @@ fn rejects_laws_that_never_pass() {
     let (code, out) = tinstar(&dir, &["compile", "--section", "money", "--attempts", "1"]);
     assert_eq!(code, 0, "{out}");
     assert!(
-        out.contains("✗ money-is-cents: rejected after 1 attempt(s): gets its own examples wrong"),
+        out.contains("✗ money-is-cents: rejected after 1 answer(s): gets its own examples wrong"),
         "{out}"
     );
+    // The report says which examples failed, and the draft is kept for a person to finish.
+    assert!(out.contains("\n      - "), "{out}");
+    assert!(
+        out.contains("draft kept in .tinstar/laws/pending/rejected/money-is-cents.yaml"),
+        "{out}"
+    );
+    let kept = dir.join(".tinstar/laws/pending/rejected/money-is-cents.yaml");
+    assert!(
+        std::fs::read_to_string(kept)
+            .unwrap()
+            .contains("# Last error:")
+    );
     assert!(out.contains("0 law(s) drafted"), "{out}");
+    // `approve --all` takes laws only, not the rejected folder.
+    let (code, _) = tinstar(&dir, &["approve", "--all"]);
+    assert_ne!(code, 0);
     std::fs::remove_dir_all(&dir).unwrap();
 }

@@ -107,10 +107,18 @@ struct Accepted {
     warnings: Vec<String>,
 }
 
+/// A draft that still failed after the last answer: kept for people to finish by hand.
+struct Rejected {
+    /// The law's id, or `law #N` when the YAML has none.
+    label: String,
+    error: String,
+    yaml: String,
+}
+
 #[derive(Default)]
 struct Outcome {
     accepted: Vec<Accepted>,
-    rejected: Vec<(String, String)>,
+    rejected: Vec<Rejected>,
     not_checkable: Vec<NotCheckable>,
     attempts: usize,
     usage: Usage,
@@ -244,12 +252,38 @@ pub fn run(root: &Path, opts: Options) -> Result<ExitCode> {
             }
             written.push(id);
         }
-        for (id, why) in &outcome.rejected {
+        for r in &outcome.rejected {
             rejected += 1;
+            let saved = match id_of(&r.yaml) {
+                Some(id) => {
+                    let dir = pending_dir.join("rejected");
+                    std::fs::create_dir_all(&dir)?;
+                    let path = dir.join(format!("{id}.yaml"));
+                    let error: String = r.error.lines().map(|l| format!("#   {l}\n")).collect();
+                    std::fs::write(
+                        &path,
+                        format!(
+                            "# Drafted by `tinstar compile` from {doc_name}#{} with {}, rejected after\n\
+                             # {} answer(s). Fix it by hand and move it to .tinstar/laws/, or delete it.\n\
+                             # Last error:\n{error}\n{}\n",
+                            section.anchor,
+                            llm.describe(),
+                            outcome.attempts,
+                            r.yaml.trim_end()
+                        ),
+                    )?;
+                    format!(
+                        "\n    draft kept in {}",
+                        path.strip_prefix(root).unwrap_or(&path).display()
+                    )
+                }
+                None => String::new(),
+            };
             println!(
-                "  ✗ {id}: rejected after {} attempt(s): {}",
+                "  ✗ {}: rejected after {} answer(s): {}{saved}",
+                r.label,
                 outcome.attempts,
-                first_line(why)
+                summary(&r.error)
             );
         }
         for nc in &outcome.not_checkable {
@@ -310,7 +344,7 @@ fn compile_section(ctx: &Ctx, section: &Section) -> Outcome {
     );
     let mut messages = vec![json!({ "role": "user", "content": prompt })];
     let mut out = Outcome::default();
-    let mut failing: Vec<(String, String)> = Vec::new(); // (id or label, error)
+    let mut failing: Vec<Rejected> = Vec::new();
 
     for attempt in 1..=ctx.attempts {
         out.attempts = attempt;
@@ -344,12 +378,17 @@ fn compile_section(ctx: &Ctx, section: &Section) -> Outcome {
             let taken =
                 |id: &str| ctx.taken.contains(id) || out.accepted.iter().any(|a| a.id == id);
             match validate(ctx, &draft.yaml, &source) {
-                Ok(a) if taken(&a.id) => failing.push((
+                Ok(a) if taken(&a.id) => failing.push(Rejected {
+                    error: format!("the id `{}` is already used; choose another", a.id),
                     label,
-                    format!("the id `{}` is already used; choose another", a.id),
-                )),
+                    yaml: draft.yaml.clone(),
+                }),
                 Ok(a) => out.accepted.push(Accepted { attempt, ..a }),
-                Err(e) => failing.push((label, e)),
+                Err(error) => failing.push(Rejected {
+                    label,
+                    error,
+                    yaml: draft.yaml.clone(),
+                }),
             }
         }
         if failing.is_empty() {
@@ -357,8 +396,8 @@ fn compile_section(ctx: &Ctx, section: &Section) -> Outcome {
         }
         if attempt < ctx.attempts {
             let mut feedback = String::from("tinstar checked your laws. These failed:\n\n");
-            for (id, e) in &failing {
-                feedback.push_str(&format!("### {id}\n{e}\n\n"));
+            for r in &failing {
+                feedback.push_str(&format!("### {}\n{}\n\n", r.label, r.error));
             }
             if !out.accepted.is_empty() {
                 let ids: Vec<&str> = out.accepted.iter().map(|a| a.id.as_str()).collect();
@@ -432,8 +471,14 @@ fn indent(s: &str) -> String {
         .join("\n")
 }
 
-fn first_line(s: &str) -> &str {
-    s.lines().next().unwrap_or("")
+/// An error for the report: its first line, plus which examples failed (without their code).
+fn summary(error: &str) -> String {
+    let mut lines = error.lines();
+    let mut out = lines.next().unwrap_or("").to_string();
+    for l in lines.filter(|l| l.starts_with("- ")) {
+        out.push_str(&format!("\n      {l}"));
+    }
+    out
 }
 
 fn existing_pending(dir: &Path) -> Vec<String> {
@@ -441,6 +486,7 @@ fn existing_pending(dir: &Path) -> Vec<String> {
         .into_iter()
         .flatten()
         .filter_map(Result::ok)
+        .filter(|e| e.path().extension().is_some_and(|x| x == "yaml"))
         .filter_map(|e| {
             e.path()
                 .file_stem()
