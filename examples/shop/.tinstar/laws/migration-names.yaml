@@ -1,0 +1,14 @@
+id: migration-names
+kind: layout
+statement: Migrations are named YYYYMMDD_description.sql, in lowercase.
+source: AGENTS.md#database
+message: Migration name does not follow YYYYMMDD_description.sql
+hint: Rename it, e.g. 20261105_add_user_email.sql.
+files: ["migrations/*.sql"]
+name_matches: ^\d{8}_[a-z0-9_]+\.sql$
+examples:
+  valid:
+    - ["migrations/20261105_add_user_email.sql"]
+  invalid:
+    - ["migrations/AddEmail.sql"]
+    - ["migrations/2026-11-05_add_email.sql"]

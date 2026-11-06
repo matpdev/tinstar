@@ -1,0 +1,15 @@
+id: no-committed-env
+kind: layout
+statement: Secrets never go into the repository, so no .env file is committed.
+source: AGENTS.md#secrets
+message: .env files must not be committed
+hint: Remove the file from git, add it to .gitignore and keep a .env.example with fake values.
+files: ["**/.env", "**/.env.*"]
+ignores: ["**/.env.example"]
+forbid: true
+examples:
+  valid:
+    - [".env.example", "src/main.ts"]
+  invalid:
+    - [".env", "src/main.ts"]
+    - ["services/api/.env.production"]

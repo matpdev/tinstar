@@ -1,0 +1,35 @@
+id: k8s-resource-limits
+kind: config
+statement: Every container in a Kubernetes Deployment declares resource limits.
+source: AGENTS.md#containers
+message: Container has no resource limits
+hint: "Add resources.limits (cpu and memory) to the container."
+language: yaml
+files: ["deploy/**/*.yaml", "deploy/**/*.yml"]
+match:
+  kind: Deployment
+assert:
+  - path: spec.template.spec.containers[*].resources.limits
+    exists: true
+examples:
+  valid:
+    - |
+      kind: Deployment
+      spec:
+        template:
+          spec:
+            containers:
+              - name: api
+                resources: { limits: { cpu: 1, memory: 1Gi } }
+    - |
+      kind: Service
+      spec: {}
+  invalid:
+    - |
+      kind: Deployment
+      spec:
+        template:
+          spec:
+            containers:
+              - name: api
+                image: api:1.0

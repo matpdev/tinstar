@@ -1,0 +1,35 @@
+id: no-float-money
+statement: Money is always an integer number of cents (the Money type), never a floating point number.
+source: AGENTS.md#money
+message: "`$NAME` is money: use Money (integer cents), not number"
+hint: Type it as Money and build it with Money.cents(...).
+language: typescript
+files: ["src/**"]
+rule:
+  kind: type_annotation
+  has:
+    kind: predefined_type
+    regex: ^number$
+  inside:
+    any:
+      - kind: variable_declarator
+        has: { field: name, pattern: $NAME }
+      - kind: required_parameter
+        has: { field: pattern, pattern: $NAME }
+      - kind: optional_parameter
+        has: { field: pattern, pattern: $NAME }
+      - kind: property_signature
+        has: { field: name, pattern: $NAME }
+      - kind: public_field_definition
+        has: { field: name, pattern: $NAME }
+constraints:
+  NAME:
+    regex: (?i)(price|total|amount|cost|discount)
+examples:
+  valid:
+    - "let total: Money = Money.cents(100);"
+    - "let quantity: number = 2;"
+  invalid:
+    - "let price: number = 9.99;"
+    - "function pay(amount: number) {}"
+    - "type Item = { unitCost: number };"

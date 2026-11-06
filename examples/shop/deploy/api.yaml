@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shop-api
+spec:
+  replicas: 2
+  template:
+    spec:
+      containers:
+        - name: api
+          image: registry.example.com/shop-api:latest
+          ports:
+            - containerPort: 8080
+        - name: worker
+          image: registry.example.com/shop-worker:1.4.2
+          resources:
+            limits: { cpu: 500m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: shop-api
+spec:
+  ports:
+    - port: 80

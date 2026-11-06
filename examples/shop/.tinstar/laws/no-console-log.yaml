@@ -1,0 +1,17 @@
+id: no-console-log
+statement: Code under src/ logs through logger, never console.log.
+source: AGENTS.md#logging
+message: Use logger instead of console.log
+hint: Replace it with logger.info(...) (import { logger } from "./logger").
+severity: warning
+language: typescript
+files: ["src/**"]
+ignores: ["**/*.test.ts"]
+rule:
+  pattern: console.log($$$ARGS)
+fix: logger.info($$$ARGS)
+examples:
+  valid:
+    - logger.info("ready");
+  invalid:
+    - console.log("ready", port);

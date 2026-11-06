@@ -1,0 +1,14 @@
+id: feature-has-test
+kind: layout
+statement: Every feature folder in src/features/ has an index.ts and at least one test.
+source: AGENTS.md#features
+message: Feature folder is incomplete
+hint: Add the missing file next to the feature's code.
+each_dir: src/features/*
+require: ["index.ts", "**/*.test.ts"]
+examples:
+  valid:
+    - ["src/features/cart/index.ts", "src/features/cart/cart.test.ts"]
+  invalid:
+    - ["src/features/cart/index.ts"]
+    - ["src/features/cart/cart.test.ts", "src/features/cart/cart.ts"]

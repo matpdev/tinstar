@@ -1,0 +1,19 @@
+id: payments-only-in-gateway
+statement: Only src/payments/ talks to the payment provider's API.
+source: AGENTS.md#payments
+message: Calls to the payment API belong in src/payments/
+hint: Add a function to src/payments/gateway.ts and call it from here.
+language: typescript
+files: ["src/**"]
+ignores: ["src/payments/**"]
+rule:
+  pattern: fetch($URL, $$$REST)
+constraints:
+  URL:
+    regex: api\.payments\.
+examples:
+  valid:
+    - 'fetch("https://api.catalog.example.com/items", {});'
+  invalid:
+    - 'fetch("https://api.payments.example.com/v1/charges", { method: "POST" });'
+    - 'fetch(`https://api.payments.example.com/v1/refunds/${id}`, {});'

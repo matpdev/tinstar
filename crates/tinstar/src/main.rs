@@ -1,0 +1,196 @@
+mod init;
+mod output;
+
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+
+use anyhow::{Context, Result, bail};
+use clap::{Parser, Subcommand, ValueEnum};
+use tinstar_core::{Lawbook, LoadError, Severity, find_root};
+
+/// The law in your repo: rules written in plain language, checked on code, infra and layout.
+#[derive(Parser)]
+#[command(version, about)]
+struct Cli {
+    /// Project root (default: the nearest folder with a `.tinstar/`, from the current one up).
+    #[arg(long, global = true)]
+    root: Option<PathBuf>,
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Create `.tinstar/laws/` with an example law.
+    Init,
+    /// Check the project (or the given files and folders) against its laws.
+    Check {
+        /// Files or folders to check, relative to the current folder (default: the whole project).
+        paths: Vec<PathBuf>,
+        /// Only files changed in git (modified, staged or untracked).
+        #[arg(long, conflicts_with = "paths")]
+        changed: bool,
+        #[arg(long, value_enum, default_value_t = Format::Human)]
+        format: Format,
+    },
+    /// Run every law against its own examples.
+    Test,
+    /// List the laws.
+    Laws,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub enum Format {
+    /// For people, with the offending line.
+    Human,
+    /// One JSON document, for tools.
+    Json,
+    /// One compact line per problem, for AI agents.
+    Agent,
+}
+
+fn main() -> ExitCode {
+    match run() {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("tinstar: {e:#}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn run() -> Result<ExitCode> {
+    let cli = Cli::parse();
+    let cwd = std::env::current_dir()?;
+
+    if let Command::Init = cli.command {
+        let root = cli.root.unwrap_or(cwd);
+        init::run(&root)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    let root = match cli.root {
+        Some(r) => r
+            .canonicalize()
+            .with_context(|| format!("no such folder: {}", r.display()))?,
+        None => find_root(&cwd)
+            .context("no `.tinstar/` here or in any parent folder (run `tinstar init`)")?
+            .canonicalize()?,
+    };
+    let (book, errors) = Lawbook::load(&root);
+    report_load_errors(&errors);
+
+    match cli.command {
+        Command::Init => unreachable!("handled above"),
+        Command::Laws => {
+            output::laws(&book);
+            Ok(exit_for_load(&errors))
+        }
+        Command::Test => {
+            let ok = output::tests(&book);
+            Ok(if ok && errors.is_empty() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            })
+        }
+        Command::Check {
+            paths,
+            changed,
+            format,
+        } => {
+            let targets = if changed {
+                Some(changed_files(&root)?)
+            } else if paths.is_empty() {
+                None
+            } else {
+                Some(
+                    paths
+                        .iter()
+                        .map(|p| relative_to_root(&root, &cwd, p))
+                        .collect::<Result<_>>()?,
+                )
+            };
+            let diagnostics = match &targets {
+                Some(t) if t.is_empty() => Vec::new(),
+                t => book.check_project(t.as_deref()),
+            };
+            output::print(&book, &diagnostics, format);
+            if diagnostics.iter().any(|d| d.severity == Severity::Error) {
+                Ok(ExitCode::FAILURE)
+            } else {
+                Ok(exit_for_load(&errors))
+            }
+        }
+    }
+}
+
+fn report_load_errors(errors: &[LoadError]) {
+    for e in errors {
+        eprintln!("tinstar: law not loaded: {e}");
+    }
+}
+
+/// A broken law file is a configuration error (exit 2), not a broken law (exit 1).
+fn exit_for_load(errors: &[LoadError]) -> ExitCode {
+    if errors.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(2)
+    }
+}
+
+fn relative_to_root(root: &Path, cwd: &Path, p: &Path) -> Result<PathBuf> {
+    let abs = cwd.join(p);
+    let abs = abs
+        .canonicalize()
+        .with_context(|| format!("no such file: {}", p.display()))?;
+    match abs.strip_prefix(root) {
+        Ok(rel) => Ok(rel.to_path_buf()),
+        Err(_) => bail!(
+            "{} is outside the project ({})",
+            p.display(),
+            root.display()
+        ),
+    }
+}
+
+/// Modified, staged and untracked files, relative to the root.
+fn changed_files(root: &Path) -> Result<Vec<PathBuf>> {
+    let git = |args: &[&str]| -> Result<String> {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .context("could not run git")?;
+        if !out.status.success() {
+            bail!(
+                "git {}: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    };
+    // git prints paths relative to the repository's top level, which may be above the root.
+    let top = PathBuf::from(git(&["rev-parse", "--show-toplevel"])?.trim());
+    let tracked = git(&["diff", "--name-only", "HEAD"])
+        .or_else(|_| git(&["diff", "--name-only", "--cached"]))?;
+    let untracked = git(&[
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "--full-name",
+        ":/",
+    ])?;
+    let mut files: Vec<PathBuf> = tracked
+        .lines()
+        .chain(untracked.lines())
+        .map(|line| top.join(line))
+        .filter(|abs| abs.exists())
+        .filter_map(|abs| abs.strip_prefix(root).ok().map(Path::to_path_buf))
+        .collect();
+    files.sort();
+    files.dedup();
+    Ok(files)
+}

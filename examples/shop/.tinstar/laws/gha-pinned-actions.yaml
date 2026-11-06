@@ -1,0 +1,25 @@
+id: gha-pinned-actions
+kind: config
+statement: GitHub Actions are pinned to a commit SHA, not to a tag.
+source: AGENTS.md#ci
+message: Action is pinned to a tag, not to a commit SHA
+hint: "Use the full commit SHA (uses: actions/checkout@<40 hex chars>) and keep the tag in a comment."
+language: yaml
+files: [".github/workflows/*.yml", ".github/workflows/*.yaml"]
+assert:
+  - path: jobs.*.steps[*].uses
+    matches: ^(\./|docker://|[^@]+@[0-9a-f]{40}$)
+examples:
+  valid:
+    - |
+      jobs:
+        test:
+          steps:
+            - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+            - run: make
+  invalid:
+    - |
+      jobs:
+        test:
+          steps:
+            - uses: actions/checkout@v4

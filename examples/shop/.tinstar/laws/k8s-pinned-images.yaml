@@ -1,0 +1,26 @@
+id: k8s-pinned-images
+kind: config
+statement: Images are pinned to a version, never latest, never without a tag.
+source: AGENTS.md#containers
+message: Image is not pinned to a version
+hint: Use an explicit version tag (api:1.4.2) or a digest (api@sha256:…).
+language: yaml
+files: ["deploy/**/*.yaml", "deploy/**/*.yml"]
+match:
+  kind: [Deployment, StatefulSet, DaemonSet, Job]
+assert:
+  - path: spec.template.spec.containers[*].image
+    matches: (:[^/:]+|@sha256:[0-9a-f]{64})$
+    not_matches: :latest$
+examples:
+  valid:
+    - |
+      kind: Deployment
+      spec: { template: { spec: { containers: [ { image: "registry.example.com/api:1.4.2" } ] } } }
+  invalid:
+    - |
+      kind: Deployment
+      spec: { template: { spec: { containers: [ { image: "registry.example.com/api:latest" } ] } } }
+    - |
+      kind: Deployment
+      spec: { template: { spec: { containers: [ { image: "registry.example.com/api" } ] } } }
