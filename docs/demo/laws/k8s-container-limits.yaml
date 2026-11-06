@@ -1,0 +1,38 @@
+# Drafted through `tinstar mcp` by Zed from AGENTS.md#containers.
+# It passed its 4 example(s) and fires 1 time(s) in the project today.
+# Review it, then: tinstar approve k8s-container-limits
+id: k8s-container-limits
+kind: config
+statement: Every container in a Kubernetes Deployment declares resource limits.
+source: AGENTS.md#containers
+message: Container declares no resource limits
+hint: Add resources.limits with cpu and memory to every container.
+severity: error
+language: yaml
+files:
+- deploy/**/*.yaml
+- deploy/**/*.yml
+match:
+  kind:
+  - Deployment
+  - StatefulSet
+  - DaemonSet
+  - Job
+assert:
+- path: spec.template.spec.containers[*].resources.limits
+  exists: true
+examples:
+  valid:
+  - |-
+    kind: Deployment
+    spec: { template: { spec: { containers: [ { name: api, image: api:1.4.2, resources: { limits: { cpu: 500m, memory: 256Mi } } } ] } } }
+  - |-
+    kind: Service
+    spec: { ports: [ { port: 80 } ] }
+  invalid:
+  - |-
+    kind: Deployment
+    spec: { template: { spec: { containers: [ { name: api, image: api:1.4.2 } ] } } }
+  - |-
+    kind: Deployment
+    spec: { template: { spec: { containers: [ { name: api, image: api:1.4.2, resources: { requests: { cpu: 100m } } } ] } } }

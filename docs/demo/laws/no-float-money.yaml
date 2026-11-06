@@ -1,0 +1,54 @@
+# Drafted through `tinstar mcp` by Zed from AGENTS.md#money.
+# It passed its 6 example(s) and fires 1 time(s) in the project today.
+# Review it, then: tinstar approve no-float-money
+id: no-float-money
+kind: pattern
+statement: Money is always an integer number of cents (the Money type), never a floating point number.
+source: AGENTS.md#money
+message: '`$NAME` is money: use Money (integer cents), not number'
+hint: Type it as Money and build it with Money.cents(...).
+severity: error
+language: typescript
+files:
+- src/**
+ignores:
+- '**/*.test.ts'
+rule:
+  kind: type_annotation
+  has:
+    kind: predefined_type
+    regex: ^number$
+  inside:
+    any:
+    - kind: variable_declarator
+      has:
+        pattern: $NAME
+        field: name
+    - kind: required_parameter
+      has:
+        pattern: $NAME
+        field: pattern
+    - kind: optional_parameter
+      has:
+        pattern: $NAME
+        field: pattern
+    - kind: property_signature
+      has:
+        pattern: $NAME
+        field: name
+    - kind: public_field_definition
+      has:
+        pattern: $NAME
+        field: name
+constraints:
+  NAME:
+    regex: (?i)(price|total|amount|cost|discount)
+examples:
+  valid:
+  - 'let total: Money = Money.cents(100);'
+  - 'let quantity: number = 2;'
+  - 'type Item = { sku: string; price: Money };'
+  invalid:
+  - 'let price: number = 9.99;'
+  - 'function pay(amount: number) {}'
+  - 'type Item = { unitCost: number };'

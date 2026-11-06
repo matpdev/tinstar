@@ -1,0 +1,54 @@
+# Drafted through `tinstar mcp` by Zed from AGENTS.md#ci.
+# It passed its 4 example(s) and fires 1 time(s) in the project today.
+# Review it, then: tinstar approve ci-pinned-actions
+id: ci-pinned-actions
+kind: config
+statement: GitHub Actions are pinned to a commit SHA, not to a tag.
+source: AGENTS.md#ci
+message: GitHub Action is pinned to a tag, not a commit SHA
+hint: Pin to the full 40-character commit SHA, e.g. actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11.
+severity: error
+language: yaml
+files:
+- .github/workflows/**/*.yml
+- .github/workflows/**/*.yaml
+assert:
+- path: jobs.*.steps[*].uses
+  matches: '@[0-9a-f]{40}$'
+examples:
+  valid:
+  - |-
+    name: ci
+    on: [push]
+    jobs:
+      test:
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+          - run: npm test
+  - |-
+    name: ci
+    on: [push]
+    jobs:
+      build:
+        runs-on: ubuntu-latest
+        steps:
+          - run: npm run build
+  invalid:
+  - |-
+    name: ci
+    on: [push]
+    jobs:
+      test:
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/checkout@v4
+          - run: npm test
+  - |-
+    name: ci
+    on: [push]
+    jobs:
+      test:
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/setup-node@main

@@ -137,22 +137,31 @@ fn human(book: &Lawbook, diagnostics: &[Diagnostic]) {
         }
         println!();
     }
-    let errors = diagnostics
-        .iter()
-        .filter(|d| d.severity == Severity::Error)
-        .count();
-    let others = diagnostics.len() - errors;
     if diagnostics.is_empty() {
         println!(
-            "{} {} law(s), nothing broken",
+            "{} {}, nothing broken",
             st.paint("1;32", "✓"),
-            book.laws.len()
+            count(book.laws.len(), "law")
         );
     } else {
+        // "3 errors, 1 warning, from 9 laws": each severity that occurs, most serious first.
+        let mut parts = Vec::new();
+        for (sev, word) in [
+            (Severity::Error, "error"),
+            (Severity::Warning, "warning"),
+            (Severity::Info, "info"),
+            (Severity::Hint, "hint"),
+        ] {
+            let n = diagnostics.iter().filter(|d| d.severity == sev).count();
+            if n > 0 {
+                parts.push(count(n, word));
+            }
+        }
         println!(
-            "{} {errors} error(s), {others} other(s), from {} law(s)",
+            "{} {}, from {}",
             st.paint("1;31", "✗"),
-            book.laws.len()
+            parts.join(", "),
+            count(book.laws.len(), "law")
         );
     }
 }
@@ -235,4 +244,13 @@ pub fn tests(book: &Lawbook) -> bool {
         );
     }
     all_ok
+}
+
+/// `1 law`, `9 laws`.
+fn count(n: usize, word: &str) -> String {
+    match (n, word) {
+        (1, _) => format!("1 {word}"),
+        (_, "info") => format!("{n} info"),
+        _ => format!("{n} {word}s"),
+    }
 }

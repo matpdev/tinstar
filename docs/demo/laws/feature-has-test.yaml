@@ -1,0 +1,24 @@
+# Drafted through `tinstar mcp` by Zed from AGENTS.md#features.
+# It passed its 4 example(s) and fires 1 time(s) in the project today.
+# Review it, then: tinstar approve feature-has-test
+id: feature-has-test
+kind: layout
+statement: Every feature folder in src/features/ has an index.ts and at least one test.
+source: AGENTS.md#features
+message: Feature folder is incomplete
+hint: Add the missing index.ts or test file next to the feature's code.
+severity: error
+each_dir: src/features/*
+require:
+- index.ts
+- '**/*.test.ts'
+examples:
+  valid:
+  - - src/features/cart/index.ts
+    - src/features/cart/cart.test.ts
+  - - src/features/checkout/index.ts
+    - src/features/checkout/checkout.test.ts
+  invalid:
+  - - src/features/cart/index.ts
+  - - src/features/cart/cart.test.ts
+    - src/features/cart/cart.ts

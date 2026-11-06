@@ -1,0 +1,24 @@
+# Drafted through `tinstar mcp` by Zed from AGENTS.md#secrets.
+# It passed its 6 example(s) and fires 1 time(s) in the project today.
+# Review it, then: tinstar approve no-committed-env
+id: no-committed-env
+kind: layout
+statement: Secrets never go into the repository, so no .env file is committed.
+source: AGENTS.md#secrets
+message: .env file is committed
+hint: 'Keep secrets out of the repository: commit an .env.example with placeholder keys and load real values from the environment.'
+severity: error
+files:
+- '**/.env'
+forbid: true
+examples:
+  valid:
+  - - .env.example
+  - - src/config.ts
+    - .env.example
+  - - src/money.ts
+  invalid:
+  - - .env
+  - - src/.env
+  - - .env
+    - .env.example

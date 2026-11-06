@@ -1,0 +1,22 @@
+# Drafted through `tinstar mcp` by Zed from AGENTS.md#database.
+# It passed its 6 example(s) and fires 1 time(s) in the project today.
+# Review it, then: tinstar approve migration-filename
+id: migration-filename
+kind: layout
+statement: Migrations are named YYYYMMDD_description.sql, in lowercase.
+source: AGENTS.md#database
+message: Migration file name does not follow YYYYMMDD_description.sql
+hint: Rename to YYYYMMDD_description.sql, lowercase, e.g. 20261201_add_email_index.sql.
+severity: error
+files:
+- migrations/*.sql
+name_matches: ^\d{8}_[a-z0-9_]+\.sql$
+examples:
+  valid:
+  - - migrations/20261101_create_users.sql
+  - - migrations/20261201_add_email_index.sql
+  invalid:
+  - - migrations/AddEmail.sql
+  - - migrations/20261101-add-email.sql
+  - - migrations/20260101_AddEmail.sql
+  - - migrations/add_email.sql

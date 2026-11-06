@@ -1,0 +1,39 @@
+# Drafted through `tinstar mcp` by Zed from AGENTS.md#containers.
+# It passed its 4 example(s) and fires 1 time(s) in the project today.
+# Review it, then: tinstar approve k8s-pinned-images
+id: k8s-pinned-images
+kind: config
+statement: Images are pinned to a version, never latest, never without a tag.
+source: AGENTS.md#containers
+message: Image is not pinned to a version
+hint: Use an explicit version tag (shop-api:1.4.2) or a digest (shop-api@sha256:...).
+severity: error
+language: yaml
+files:
+- deploy/**/*.yaml
+- deploy/**/*.yml
+match:
+  kind:
+  - Deployment
+  - StatefulSet
+  - DaemonSet
+  - Job
+assert:
+- path: spec.template.spec.containers[*].image
+  matches: :[^/:]+$|@sha256:[0-9a-f]{64}$
+  not_matches: :latest$
+examples:
+  valid:
+  - |-
+    kind: Deployment
+    spec: { template: { spec: { containers: [ { image: registry.example.com/shop-api:1.4.2 } ] } } }
+  - |-
+    kind: Deployment
+    spec: { template: { spec: { containers: [ { image: "registry.example.com/shop-api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" } ] } } }
+  invalid:
+  - |-
+    kind: Deployment
+    spec: { template: { spec: { containers: [ { image: registry.example.com/shop-api:latest } ] } } }
+  - |-
+    kind: Deployment
+    spec: { template: { spec: { containers: [ { image: registry.example.com/shop-api } ] } } }

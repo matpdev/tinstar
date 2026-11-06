@@ -5,7 +5,13 @@ layout that people and AI agents can't ignore.
 
 `AGENTS.md` and `CLAUDE.md` tell an agent what the rules are, but nothing makes sure they were followed,
 and every rule costs tokens in every conversation. Tinstar turns each rule into a **law**: a small check
-that runs without an LLM, in your terminal, in CI and (soon) in your editor and in the agent's loop.
+that runs without an LLM, in your terminal, your editor, CI and the agent's loop.
+
+![tinstar in a terminal: the rules in AGENTS.md, the laws drafted from them, a check of code, infra
+and CI, and what an AI agent is told after an edit](docs/demo/tinstar-terminal.gif)
+
+<sub>The laws in this demo were drafted by an agent in Zed (DeepSeek) through `tinstar mcp`, then
+approved. Re-record it with `vhs docs/demo/terminal.tape`.</sub>
 
 ```console
 $ tinstar check        # in examples/shop (excerpt)
@@ -30,11 +36,11 @@ error[feature-has-test] Feature folder is incomplete (missing `**/*.test.ts`)
   = law: "Every feature folder in src/features/ has an index.ts and at least one test." (AGENTS.md#features)
   = help: Add the missing file next to the feature's code.
 
-✗ 8 error(s), 1 other(s), from 9 law(s)
+✗ 8 errors, 1 warning, from 9 laws
 ```
 
-> **Status: early.** The engine, the CLI, `tinstar compile`, the language server (Zed) and the Claude
-> Code hook work.
+> **Status: early.** The engine, the CLI, `tinstar compile`, the MCP server, the language server
+> (Zed) and the Claude Code hook work.
 
 ## Laws
 

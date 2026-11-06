@@ -1,0 +1,22 @@
+# Drafted through `tinstar mcp` by Zed from AGENTS.md#logging.
+# It passed its 4 example(s) and fires 1 time(s) in the project today.
+# Review it, then: tinstar approve no-console-log
+id: no-console-log
+kind: pattern
+statement: Code under src/ logs through logger, never console.log.
+source: AGENTS.md#logging
+message: 'console.log under src/: use logger.info'
+hint: Import logger from ./logger and call logger.info(...) instead.
+severity: warning
+language: typescript
+files:
+- src/**
+rule:
+  pattern: console.log($$$ARGS)
+examples:
+  valid:
+  - logger.info("total", total.cents);
+  - logger.info("coupon", code, discount);
+  invalid:
+  - console.log("coupon", code, discount);
+  - console.log(JSON.stringify(items));

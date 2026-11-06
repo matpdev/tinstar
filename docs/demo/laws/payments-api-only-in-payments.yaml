@@ -1,0 +1,28 @@
+# Drafted through `tinstar mcp` by Zed from AGENTS.md#payments.
+# It passed its 4 example(s) and fires 1 time(s) in the project today.
+# Review it, then: tinstar approve payments-api-only-in-payments
+id: payments-api-only-in-payments
+kind: pattern
+statement: Only src/payments/ talks to the payment provider's API.
+source: AGENTS.md#payments
+message: Payment provider API used outside src/payments/
+hint: Move the call into src/payments/gateway.ts and import it from there.
+severity: error
+language: typescript
+files:
+- src/**
+ignores:
+- src/payments/**
+rule:
+  any:
+  - kind: string
+    regex: api\.payments\.example\.com
+  - kind: template_string
+    regex: api\.payments\.example\.com
+examples:
+  valid:
+  - const id = await charge(amount, token);
+  - const res = await fetch("https://api.other.example.com/health");
+  invalid:
+  - 'const res = await fetch("https://api.payments.example.com/v1/charges", { method: "POST" });'
+  - const res = await fetch(`https://api.payments.example.com/v1/refunds/${chargeId}`);
