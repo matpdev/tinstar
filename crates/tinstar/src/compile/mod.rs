@@ -1,12 +1,20 @@
 //! `tinstar compile`: drafts laws from a rules document (AGENTS.md) with an LLM, once.
 //!
-//! Each section goes to the LLM with a picture of the project. Every law that comes back is
-//! compiled and run against its own examples; the ones that fail go back to the LLM with the error,
-//! a few times at most. Only laws that pass are written, to `.tinstar/laws/pending/`, for a person
-//! to review and approve. Rules that can't be checked from the code are listed, not forced.
+//! 1. Sections unchanged since the last compile are skipped (`ledger`).
+//! 2. One cheap call sets aside the sections with nothing checkable (`triage`).
+//! 3. Each remaining section goes to the LLM with a picture of the project. Every law that comes
+//!    back is compiled and run against its own examples, then on the project: a law that fails
+//!    goes back with the error, and one that fires too often goes back with a sample of its hits
+//!    (`noise`), a few times at most.
+//!
+//! Only laws that pass are written, to `.tinstar/laws/pending/`, for a person to review and
+//! approve. Rules that can't be checked from the code are listed, not forced.
 
+mod ledger;
 mod llm;
+mod noise;
 mod sections;
+mod triage;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -15,10 +23,11 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tinstar_core::{LAWS_DIR, Law, Lawbook, walk_files};
+use tinstar_core::{Diagnostic, LAWS_DIR, Law, Lawbook, walk_files};
 
+use ledger::{Entry, Ledger};
 pub use llm::Provider;
 use llm::{Llm, Usage};
 use sections::Section;
@@ -30,6 +39,9 @@ pub struct Options {
     pub provider: Option<Provider>,
     pub model: Option<String>,
     pub base_url: Option<String>,
+    pub force: bool,
+    pub triage: bool,
+    pub noise_limit: usize,
 }
 
 const PROMPT: &str = include_str!("prompt.md");
@@ -54,7 +66,7 @@ fn schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["laws", "not_checkable"],
+        "required": ["laws", "not_checkable", "confirmed"],
         "properties": {
             "laws": {
                 "type": "array",
@@ -73,6 +85,15 @@ fn schema() -> Value {
                     "required": ["statement", "reason"],
                     "properties": { "statement": { "type": "string" }, "reason": { "type": "string" } }
                 }
+            },
+            "confirmed": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["id", "reason"],
+                    "properties": { "id": { "type": "string" }, "reason": { "type": "string" } }
+                }
             }
         }
     })
@@ -84,6 +105,9 @@ struct Answer {
     laws: Vec<DraftLaw>,
     #[serde(default)]
     not_checkable: Vec<NotCheckable>,
+    /// Laws sent back by the noise check whose hits the LLM says are real violations.
+    #[serde(default)]
+    confirmed: Vec<Confirmed>,
 }
 
 #[derive(Deserialize)]
@@ -91,9 +115,15 @@ struct DraftLaw {
     yaml: String,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 struct NotCheckable {
     statement: String,
+    reason: String,
+}
+
+#[derive(Deserialize)]
+struct Confirmed {
+    id: String,
     reason: String,
 }
 
@@ -105,6 +135,8 @@ struct Accepted {
     examples: usize,
     hits: usize,
     warnings: Vec<String>,
+    /// Why it was kept although it fires often (the LLM's answer to the noise check).
+    confirmed: Option<String>,
 }
 
 /// A draft that still failed after the last answer: kept for people to finish by hand.
@@ -119,10 +151,21 @@ struct Rejected {
 struct Outcome {
     accepted: Vec<Accepted>,
     rejected: Vec<Rejected>,
+    /// Laws the LLM dropped after the noise check: (id, hits).
+    dropped: Vec<(String, usize)>,
     not_checkable: Vec<NotCheckable>,
     attempts: usize,
     usage: Usage,
     error: Option<String>,
+}
+
+/// What happens to a section in this run.
+enum Step {
+    /// Same text as last time: what it gave then still holds.
+    Unchanged(Entry),
+    /// The triage found nothing checkable in it.
+    SetAside(Vec<NotCheckable>),
+    Compile,
 }
 
 pub fn run(root: &Path, opts: Options) -> Result<ExitCode> {
@@ -139,7 +182,8 @@ pub fn run(root: &Path, opts: Options) -> Result<ExitCode> {
         .display()
         .to_string();
     let mut sections = sections::split(&markdown);
-    if !opts.sections.is_empty() {
+    let named = !opts.sections.is_empty();
+    if named {
         sections.retain(|s| {
             opts.sections
                 .iter()
@@ -162,14 +206,59 @@ pub fn run(root: &Path, opts: Options) -> Result<ExitCode> {
     let (book, _) = Lawbook::load(root);
     let mut taken: HashSet<String> = book.laws.iter().map(|l| l.id.clone()).collect();
     taken.extend(existing_pending(&pending_dir));
+    let mut ledger = Ledger::load(root);
+    let mut total = Usage::default();
 
+    // 1. Sections named on the command line, or all with --force, are compiled again; the others
+    //    only if their text changed.
+    let fingerprints: Vec<String> = sections
+        .iter()
+        .map(|s| sections::fingerprint(&s.text))
+        .collect();
+    let mut steps: Vec<Step> = sections
+        .iter()
+        .zip(&fingerprints)
+        .map(|(s, f)| match ledger.unchanged(&doc_name, &s.anchor, f) {
+            Some(e) if !named && !opts.force => Step::Unchanged(e.clone()),
+            _ => Step::Compile,
+        })
+        .collect();
+    let to_compile = |steps: &[Step]| -> Vec<usize> {
+        (0..steps.len())
+            .filter(|&i| matches!(steps[i], Step::Compile))
+            .collect()
+    };
     println!(
-        "compiling {} section(s) of {doc_name} with {}",
+        "compiling {} of {} section(s) of {doc_name} with {}",
+        to_compile(&steps).len(),
         sections.len(),
         llm.describe()
     );
+
+    // 2. Triage: one call over the whole document, so sections about process or intent don't
+    //    pay for the full prompt. Skipped when sections are named: the person already chose.
+    let todo = to_compile(&steps);
+    if opts.triage && !named && todo.len() > 2 {
+        let refs: Vec<&Section> = todo.iter().map(|&i| &sections[i]).collect();
+        match triage::run(llm.as_ref(), &doc_name, &refs) {
+            Ok((mut skipped, usage)) => {
+                total += usage;
+                for &i in &todo {
+                    if let Some(nc) = skipped.remove(&sections[i].anchor) {
+                        steps[i] = Step::SetAside(nc);
+                    }
+                }
+            }
+            Err(e) => println!("  ! triage failed ({e:#}); compiling every section"),
+        }
+    }
+
+    // 3. Compile. The first section goes alone, so the prompt's stable start (law format and
+    //    project picture) is cached before the others ask for it; then a few at a time.
+    let todo = to_compile(&steps);
     let system = system_prompt();
     let schema = schema();
+    let overview = sections::overview(&files);
     let ctx = Ctx {
         root,
         files: &files,
@@ -177,44 +266,82 @@ pub fn run(root: &Path, opts: Options) -> Result<ExitCode> {
         llm: llm.as_ref(),
         system: &system,
         schema: &schema,
+        overview: &overview,
         attempts: opts.attempts.max(1),
+        noise_limit: opts.noise_limit,
         taken: &taken,
     };
-
-    // Sections are independent: a few at a time.
-    let next = AtomicUsize::new(0);
     let results: Mutex<Vec<(usize, Outcome)>> = Mutex::new(Vec::new());
+    if let Some(&first) = todo.first() {
+        let outcome = compile_section(&ctx, &sections[first]);
+        results.lock().expect("results lock").push((first, outcome));
+    }
+    let next = AtomicUsize::new(1);
     std::thread::scope(|scope| {
-        for _ in 0..sections.len().min(4) {
+        for _ in 0..todo.len().saturating_sub(1).min(4) {
             scope.spawn(|| {
                 loop {
-                    let i = next.fetch_add(1, Ordering::SeqCst);
-                    let Some(section) = sections.get(i) else {
+                    let n = next.fetch_add(1, Ordering::SeqCst);
+                    let Some(&i) = todo.get(n) else {
                         break;
                     };
-                    let outcome = compile_section(&ctx, section);
+                    let outcome = compile_section(&ctx, &sections[i]);
                     results.lock().expect("results lock").push((i, outcome));
                 }
             });
         }
     });
     let mut results = results.into_inner().expect("results lock");
-    results.sort_by_key(|(i, _)| *i);
 
-    // Write what passed, and report.
+    // 4. Write what passed, and report, in the document's order.
     std::fs::create_dir_all(&pending_dir)?;
     let mut written = Vec::new();
-    let mut total = Usage::default();
-    let mut rejected = 0;
+    let (mut rejected, mut unchanged, mut set_aside) = (0, 0, 0);
     let mut written_ids = taken.clone();
-    for (i, outcome) in &results {
-        let section = &sections[*i];
-        total.input += outcome.usage.input;
-        total.output += outcome.usage.output;
+    let mut failed = false;
+    for (i, section) in sections.iter().enumerate() {
         println!("\n## {} ({}#{})", section.heading, doc_name, section.anchor);
+        let outcome = match &steps[i] {
+            Step::Unchanged(e) => {
+                unchanged += 1;
+                println!(
+                    "  = unchanged since the last compile: {} law(s), {} rule(s) left to the document",
+                    e.laws.len(),
+                    e.not_checkable.len()
+                );
+                continue;
+            }
+            Step::SetAside(nc) => {
+                set_aside += 1;
+                print_not_checkable(&doc_name, nc);
+                if nc.is_empty() {
+                    println!("  · no rules here");
+                }
+                ledger.record(
+                    &doc_name,
+                    &section.anchor,
+                    Entry {
+                        fingerprint: fingerprints[i].clone(),
+                        laws: Vec::new(),
+                        not_checkable: nc.clone(),
+                    },
+                );
+                continue;
+            }
+            Step::Compile => {
+                let at = results
+                    .iter()
+                    .position(|(j, _)| *j == i)
+                    .expect("every compiled section has an outcome");
+                results.swap_remove(at).1
+            }
+        };
+        total += outcome.usage;
         if let Some(e) = &outcome.error {
+            failed = true;
             println!("  ✗ {e}");
         }
+        let mut section_laws = Vec::new();
         for a in &outcome.accepted {
             let mut id = a.id.clone();
             let mut n = 2;
@@ -224,20 +351,23 @@ pub fn run(root: &Path, opts: Options) -> Result<ExitCode> {
                 n += 1;
             }
             written_ids.insert(id.clone());
-            let header = format!(
+            let mut header = format!(
                 "# Drafted by `tinstar compile` from {doc_name}#{} with {}.\n\
-                 # It passed its {} example(s) and fires {} time(s) in the project today.\n\
-                 # Review it, then: tinstar approve {id}\n",
+                 # It passed its {} example(s) and fires {} time(s) in the project today.\n",
                 section.anchor,
                 llm.describe(),
                 a.examples,
                 a.hits,
             );
+            if let Some(why) = &a.confirmed {
+                header.push_str(&format!("# Kept after the noise check: {why}\n"));
+            }
+            for w in &a.warnings {
+                header.push_str(&format!("# Warning: {w}\n"));
+            }
+            header.push_str(&format!("# Review it, then: tinstar approve {id}\n"));
             let path = pending_dir.join(format!("{id}.yaml"));
-            std::fs::write(
-                &path,
-                format!("{header}{}", a.yaml.trim_end().to_string() + "\n"),
-            )?;
+            std::fs::write(&path, format!("{header}{}\n", a.yaml.trim_end()))?;
             let fixed = if a.attempt > 1 {
                 format!(", fixed from feedback (answer {})", a.attempt)
             } else {
@@ -247,10 +377,17 @@ pub fn run(root: &Path, opts: Options) -> Result<ExitCode> {
                 "  ✓ {id}: {} example(s) pass, {} hit(s) in the project{fixed}",
                 a.examples, a.hits
             );
+            if let Some(why) = &a.confirmed {
+                println!("    kept after the noise check: {why}");
+            }
             for w in &a.warnings {
                 println!("    ! {w}");
             }
+            section_laws.push(id.clone());
             written.push(id);
+        }
+        for (id, hits) in &outcome.dropped {
+            println!("  ~ {id}: dropped after the noise check (it fired {hits} time(s))");
         }
         for r in &outcome.rejected {
             rejected += 1;
@@ -286,40 +423,65 @@ pub fn run(root: &Path, opts: Options) -> Result<ExitCode> {
                 summary(&r.error)
             );
         }
-        for nc in &outcome.not_checkable {
-            println!(
-                "  · stays in {doc_name}: \"{}\" ({})",
-                nc.statement, nc.reason
-            );
-        }
+        print_not_checkable(&doc_name, &outcome.not_checkable);
         if outcome.accepted.is_empty()
             && outcome.rejected.is_empty()
+            && outcome.dropped.is_empty()
             && outcome.not_checkable.is_empty()
             && outcome.error.is_none()
         {
             println!("  · no rules here");
         }
+        // A section is remembered unless the call itself failed (network, provider): running again
+        // shouldn't pay for the same rejected drafts. --force or --section tries again.
+        if outcome.error.is_none() {
+            ledger.record(
+                &doc_name,
+                &section.anchor,
+                Entry {
+                    fingerprint: fingerprints[i].clone(),
+                    laws: section_laws,
+                    not_checkable: outcome.not_checkable.clone(),
+                },
+            );
+        } else {
+            ledger.forget(&doc_name, &section.anchor);
+        }
     }
+    ledger.save(root)?;
+
     println!(
-        "\n{} law(s) drafted in {}, {} rejected; {} input + {} output tokens, spent once.",
+        "\n{} law(s) drafted in {}, {} rejected; {} section(s) unchanged, {} set aside by the triage.",
         written.len(),
         pending_dir
             .strip_prefix(root)
             .unwrap_or(&pending_dir)
             .display(),
         rejected,
-        total.input,
-        total.output
+        unchanged,
+        set_aside,
+    );
+    println!(
+        "{} input tokens ({} from the cache) + {} output, spent once.",
+        total.input, total.cached, total.output
     );
     if !written.is_empty() {
         println!("review them, then: tinstar approve --all (or one id at a time)");
     }
-    let failed = results.iter().any(|(_, o)| o.error.is_some());
     Ok(if failed {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
     })
+}
+
+fn print_not_checkable(doc_name: &str, items: &[NotCheckable]) {
+    for nc in items {
+        println!(
+            "  · stays in {doc_name}: \"{}\" ({})",
+            nc.statement, nc.reason
+        );
+    }
 }
 
 struct Ctx<'a> {
@@ -329,22 +491,38 @@ struct Ctx<'a> {
     llm: &'a dyn Llm,
     system: &'a str,
     schema: &'a Value,
+    /// The project's picture: the same for every section, sent first so it can be cached.
+    overview: &'a str,
     attempts: usize,
+    noise_limit: usize,
     taken: &'a HashSet<String>,
 }
 
 fn compile_section(ctx: &Ctx, section: &Section) -> Outcome {
     let source = format!("{}#{}", ctx.doc_name, section.anchor);
-    let prompt = format!(
-        "Document: {doc}. Section \"{heading}\", source: `{source}`.\n\n<section>\n{text}</section>\n\n<project>\n{project}</project>",
-        doc = ctx.doc_name,
-        heading = section.heading,
-        text = section.text,
-        project = sections::project_context(ctx.root, ctx.files, &section.text),
-    );
-    let mut messages = vec![json!({ "role": "user", "content": prompt })];
+    let mentioned = sections::mentioned(ctx.root, ctx.files, &section.text);
+    let files = if mentioned.is_empty() {
+        String::new()
+    } else {
+        format!("\n\n<files>\n{mentioned}</files>")
+    };
+    // Stable part first (cached by providers that cache prompts), the section last.
+    let first = json!({ "role": "user", "content": [
+        { "type": "text", "text": format!("<project>\n{}</project>", ctx.overview), "cache": true },
+        { "type": "text", "text": format!(
+            "Document: {doc}. Section \"{heading}\", source: `{source}`.\n\n<section>\n{text}</section>{files}",
+            doc = ctx.doc_name,
+            heading = section.heading,
+            text = section.text,
+        ) },
+    ]});
+    let mut messages = vec![first];
     let mut out = Outcome::default();
     let mut failing: Vec<Rejected> = Vec::new();
+    // Laws held back by the noise check, waiting for the LLM's verdict, with their hits.
+    let mut held: Vec<(Accepted, Vec<Diagnostic>)> = Vec::new();
+    // Each law goes through the noise check once: a narrowed version is taken as it is.
+    let mut reviewed: HashSet<String> = HashSet::new();
 
     for attempt in 1..=ctx.attempts {
         out.attempts = attempt;
@@ -358,8 +536,7 @@ fn compile_section(ctx: &Ctx, section: &Section) -> Outcome {
                 return out;
             }
         };
-        out.usage.input += reply.usage.input;
-        out.usage.output += reply.usage.output;
+        out.usage += reply.usage;
         messages.push(reply.message.clone());
 
         let answer: Answer = match serde_json::from_str(reply.text.trim()) {
@@ -369,21 +546,62 @@ fn compile_section(ctx: &Ctx, section: &Section) -> Outcome {
                 continue;
             }
         };
-        if attempt == 1 {
-            out.not_checkable = answer.not_checkable.clone();
+        for nc in answer.not_checkable {
+            if !out
+                .not_checkable
+                .iter()
+                .any(|o| o.statement == nc.statement)
+            {
+                out.not_checkable.push(nc);
+            }
         }
-        failing.clear();
+        // The verdict on laws held by the noise check: confirmed ones are kept; the others are
+        // dropped, unless a narrower version came back (it is checked below).
+        for (a, _) in std::mem::take(&mut held) {
+            let narrowed = answer
+                .laws
+                .iter()
+                .any(|d| id_of(&d.yaml).as_deref() == Some(&a.id));
+            match answer.confirmed.iter().find(|c| c.id == a.id) {
+                Some(c) => out.accepted.push(Accepted {
+                    confirmed: Some(c.reason.clone()),
+                    ..a
+                }),
+                None if !narrowed => out.dropped.push((a.id, a.hits)),
+                None => {}
+            }
+        }
+        // A failing law the answer leaves out stays failing: it is asked for again, and in the
+        // end kept as a rejected draft rather than lost.
+        let previous = std::mem::take(&mut failing);
+        let answered: Vec<Option<String>> = answer.laws.iter().map(|d| id_of(&d.yaml)).collect();
+        failing.extend(previous.into_iter().filter(|r| {
+            !answered
+                .iter()
+                .any(|a| a.as_deref() == Some(r.label.as_str()))
+        }));
         for (n, draft) in answer.laws.iter().enumerate() {
             let label = id_of(&draft.yaml).unwrap_or_else(|| format!("law #{}", n + 1));
             let taken =
                 |id: &str| ctx.taken.contains(id) || out.accepted.iter().any(|a| a.id == id);
             match validate(ctx, &draft.yaml, &source) {
-                Ok(a) if taken(&a.id) => failing.push(Rejected {
+                Ok((a, _)) if taken(&a.id) => failing.push(Rejected {
                     error: format!("the id `{}` is already used; choose another", a.id),
                     label,
                     yaml: draft.yaml.clone(),
                 }),
-                Ok(a) => out.accepted.push(Accepted { attempt, ..a }),
+                Ok((a, hits)) if a.hits > ctx.noise_limit && reviewed.insert(a.id.clone()) => {
+                    held.push((Accepted { attempt, ..a }, hits));
+                }
+                Ok((mut a, _)) => {
+                    if a.hits > ctx.noise_limit {
+                        a.warnings.push(format!(
+                            "still fires {} times in the project after the noise check",
+                            a.hits
+                        ));
+                    }
+                    out.accepted.push(Accepted { attempt, ..a });
+                }
                 Err(error) => failing.push(Rejected {
                     label,
                     error,
@@ -391,13 +609,24 @@ fn compile_section(ctx: &Ctx, section: &Section) -> Outcome {
                 }),
             }
         }
-        if failing.is_empty() {
+        if failing.is_empty() && held.is_empty() {
             break;
         }
         if attempt < ctx.attempts {
-            let mut feedback = String::from("tinstar checked your laws. These failed:\n\n");
-            for r in &failing {
-                feedback.push_str(&format!("### {}\n{}\n\n", r.label, r.error));
+            let mut feedback = String::new();
+            if !failing.is_empty() {
+                feedback.push_str("tinstar checked your laws. These failed:\n\n");
+                for r in &failing {
+                    feedback.push_str(&format!("### {}\n{}\n\n", r.label, r.error));
+                }
+            }
+            if !held.is_empty() {
+                feedback.push_str(noise::ASK);
+                feedback.push_str("\n\n");
+                for (a, hits) in &held {
+                    feedback.push_str(&noise::report(&a.id, hits, ctx.root));
+                    feedback.push('\n');
+                }
             }
             if !out.accepted.is_empty() {
                 let ids: Vec<&str> = out.accepted.iter().map(|a| a.id.as_str()).collect();
@@ -406,16 +635,24 @@ fn compile_section(ctx: &Ctx, section: &Section) -> Outcome {
                     ids.join(", ")
                 ));
             }
-            feedback.push_str("Answer with corrected versions of the failing laws only, in the same JSON shape (not_checkable may be empty).");
+            feedback.push_str("Answer with corrected versions of these laws only, in the same JSON shape (not_checkable may be empty).");
             messages.push(json!({ "role": "user", "content": feedback }));
         }
+    }
+    // Answers ran out while laws waited for the noise check: keep them for the person reviewing.
+    for (mut a, _) in held {
+        a.warnings.push(format!(
+            "fires {} times in the project; the noise check ran out of answers",
+            a.hits
+        ));
+        out.accepted.push(a);
     }
     out.rejected = failing;
     out
 }
 
-/// Compiles a drafted law and runs it against its examples and on the project.
-fn validate(ctx: &Ctx, yaml: &str, source: &str) -> Result<Accepted, String> {
+/// Compiles a drafted law and runs it against its examples, then on the project (its hits).
+fn validate(ctx: &Ctx, yaml: &str, source: &str) -> Result<(Accepted, Vec<Diagnostic>), String> {
     let law = Law::from_yaml(yaml).map_err(|e| format!("does not load: {e}"))?;
     if law.source.as_deref() != Some(source) {
         return Err(format!("`source` must be `{source}`"));
@@ -441,21 +678,26 @@ fn validate(ctx: &Ctx, yaml: &str, source: &str) -> Result<Accepted, String> {
         return Err(e);
     }
     let mut warnings = Vec::new();
-    let selected = ctx.files.iter().filter(|f| law.selects(f)).count();
-    if selected == 0 {
+    if !ctx.files.iter().any(|f| law.selects(f)) {
         warnings.push("its `files` globs select no file in the project today".into());
     }
     let id = law.id.clone();
     let book = Lawbook::from_laws(ctx.root, vec![law]);
-    let hits = book.check_project(None).len();
-    Ok(Accepted {
-        id,
-        attempt: 0,
-        yaml: yaml.to_string(),
-        examples: valid + invalid,
+    let refs: Vec<&PathBuf> = ctx.files.iter().collect();
+    let mut hits = book.check_files(&refs);
+    hits.extend(book.check_layout(ctx.files));
+    Ok((
+        Accepted {
+            id,
+            attempt: 0,
+            yaml: yaml.to_string(),
+            examples: valid + invalid,
+            hits: hits.len(),
+            warnings,
+            confirmed: None,
+        },
         hits,
-        warnings,
-    })
+    ))
 }
 
 fn id_of(yaml: &str) -> Option<String> {

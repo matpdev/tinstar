@@ -1,0 +1,70 @@
+{
+ "triage": [
+  {
+   "sections": [
+    {
+     "anchor": "money",
+     "checkable": true,
+     "not_checkable": []
+    },
+    {
+     "anchor": "containers",
+     "checkable": true,
+     "not_checkable": []
+    },
+    {
+     "anchor": "pull-requests",
+     "checkable": false,
+     "not_checkable": [
+      {
+       "statement": "PR titles are imperative.",
+       "reason": "PR titles live on GitHub, not in the repository."
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "money": [
+  {
+   "laws": [
+    {
+     "yaml": "id: money-is-cents\nstatement: Money is always an integer number of cents (the Money type), never a floating point number.\nsource: RULES.md#money\nmessage: \"`$NAME` holds money: type it as Money\"\nhint: Use the Money type and Money.cents(...).\nlanguage: typescript\nfiles: [\"src/**\"]\nrule:\n  kind: type_annotation\n  has: { kind: predefined_type, regex: ^number$ }\n  inside:\n    any:\n      - kind: variable_declarator\n        has: { field: name, pattern: $NAME }\n      - kind: required_parameter\n        has: { field: pattern, pattern: $NAME }\nconstraints:\n  NAME: { regex: (?i)(price|total|amount|cost|discount) }\nexamples:\n  valid:\n    - \"const total: Money = Money.cents(0);\"\n    - \"let quantity: number = 3;\"\n  invalid:\n    - \"let price: number = 9.99;\"\n    - \"function refund(amount: number) {}\"\n"
+    }
+   ],
+   "not_checkable": [],
+   "confirmed": []
+  },
+  {
+   "laws": [],
+   "not_checkable": [],
+   "confirmed": [
+    {
+     "id": "money-is-cents",
+     "reason": "cart.ts really types a discount as number"
+    }
+   ]
+  }
+ ],
+ "containers": [
+  {
+   "laws": [
+    {
+     "yaml": "id: containers-have-limits\nkind: config\nstatement: Every container in a Kubernetes Deployment declares resource limits.\nsource: RULES.md#containers\nmessage: Container has no resource limits\nhint: Add resources.limits with cpu and memory.\nlanguage: yaml\nfiles: [\"deploy/**/*.yaml\"]\nmatch: { kind: Deployment }\nassert:\n  - path: spec.template.spec.containers[*].resources.limits\n    exists: true\nexamples:\n  valid:\n    - |-\n      kind: Deployment\n      spec: { template: { spec: { containers: [ { name: api, resources: { limits: { cpu: 1 } } } ] } } }\n    - |-\n      kind: Service\n      spec: {}\n  invalid:\n    - |-\n      kind: Deployment\n      spec: { template: { spec: { containers: [ { name: api } ] } } }\n    - |-\n      kind: Deployment\n      spec: { template: { spec: { containers: [ { name: api, resources: { requests: { cpu: 1 } } } ] } } }\n"
+    }
+   ],
+   "not_checkable": [],
+   "confirmed": []
+  },
+  {
+   "laws": [],
+   "not_checkable": [],
+   "confirmed": [
+    {
+     "id": "containers-have-limits",
+     "reason": "the api Deployment really has no limits"
+    }
+   ]
+  }
+ ]
+}

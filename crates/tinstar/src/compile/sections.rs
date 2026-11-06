@@ -58,48 +58,83 @@ pub fn anchor(heading: &str) -> String {
         .collect()
 }
 
-/// What the LLM sees of the project: languages, paths, and the files a section names.
-pub fn project_context(root: &Path, files: &[PathBuf], section: &str) -> String {
-    let mut by_ext: BTreeMap<String, usize> = BTreeMap::new();
-    for f in files {
-        let ext = f
-            .extension()
+/// What the LLM sees of the whole project: languages, folders and a sample of paths. It is the
+/// same for every section of a run, so it goes first and providers can cache it.
+pub fn overview(files: &[PathBuf]) -> String {
+    let ext_of = |f: &Path| {
+        f.extension()
             .map(|e| e.to_string_lossy().into_owned())
             .unwrap_or_else(|| {
                 f.file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default()
-            });
-        *by_ext.entry(ext).or_default() += 1;
+            })
+    };
+    let mut by_ext: BTreeMap<String, usize> = BTreeMap::new();
+    for f in files {
+        *by_ext.entry(ext_of(f)).or_default() += 1;
     }
-    let mut exts: Vec<(String, usize)> = by_ext.into_iter().collect();
-    exts.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
-    let mut out = String::from("Files by extension: ");
-    out.push_str(
-        &exts
-            .iter()
-            .take(15)
-            .map(|(e, n)| format!("{e} ({n})"))
-            .collect::<Vec<_>>()
-            .join(", "),
-    );
+    let mut out = format!("{} files. By extension: {}\n", files.len(), top(by_ext, 15));
 
-    const MAX_PATHS: usize = 300;
-    out.push_str(&format!(
-        "\n\nPaths ({} files{}):\n",
-        files.len(),
-        if files.len() > MAX_PATHS {
-            ", first 300"
-        } else {
-            ""
+    // Folders, as deep as fits: three levels, fewer on big repositories.
+    const MAX_FOLDERS: usize = 120;
+    let mut folders: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
+    for depth in (1..=3).rev() {
+        folders.clear();
+        for f in files {
+            let parts: Vec<_> = f.parent().into_iter().flat_map(Path::components).collect();
+            if parts.is_empty() {
+                continue;
+            }
+            let dir: PathBuf = parts.iter().take(depth).collect();
+            *folders
+                .entry(format!("{}/", dir.display()))
+                .or_default()
+                .entry(ext_of(f))
+                .or_default() += 1;
         }
+        if folders.len() <= MAX_FOLDERS {
+            break;
+        }
+    }
+    let shown = folders.len().min(MAX_FOLDERS);
+    out.push_str(&format!(
+        "\nFolders ({shown} of {}), with their files by extension:\n",
+        folders.len()
     ));
-    for f in files.iter().take(MAX_PATHS) {
-        out.push_str(&format!("{}\n", f.display()));
+    for (dir, exts) in folders.into_iter().take(MAX_FOLDERS) {
+        out.push_str(&format!("{dir} {}\n", top(exts, 4)));
     }
 
-    // Files and folders the section mentions (`src/payments/`, `deploy/api.yaml`): a few of their
-    // files, so examples look like this project's code.
+    // Real paths, spread over the tree, so globs and examples use the project's names.
+    const SAMPLE: usize = 60;
+    let step = (files.len() / SAMPLE).max(1);
+    out.push_str("\nSome paths:\n");
+    let root_files = files.iter().filter(|f| f.components().count() == 1);
+    let spread = files.iter().step_by(step).take(SAMPLE);
+    let mut seen = std::collections::BTreeSet::new();
+    for f in root_files.chain(spread) {
+        if seen.insert(f) {
+            out.push_str(&format!("{}\n", f.display()));
+        }
+    }
+    out
+}
+
+/// `rs (40), toml (2)`, biggest first.
+fn top(counts: BTreeMap<String, usize>, n: usize) -> String {
+    let mut v: Vec<(String, usize)> = counts.into_iter().collect();
+    v.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
+    v.iter()
+        .take(n)
+        .map(|(e, c)| format!("{e} ({c})"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Files and folders a section mentions (`src/payments/`, `deploy/api.yaml`): the start of a few
+/// of them, so examples look like this project's code.
+pub fn mentioned(root: &Path, files: &[PathBuf], section: &str) -> String {
     let mentioned: Vec<&PathBuf> = files
         .iter()
         .filter(|f| {
@@ -112,14 +147,25 @@ pub fn project_context(root: &Path, files: &[PathBuf], section: &str) -> String 
         })
         .take(4)
         .collect();
+    let mut out = String::new();
     for f in mentioned {
         let Ok(text) = std::fs::read_to_string(root.join(f)) else {
             continue;
         };
-        let head: String = text.lines().take(80).collect::<Vec<_>>().join("\n");
-        out.push_str(&format!("\n--- {} ---\n{head}\n", f.display()));
+        let head: String = text.lines().take(50).collect::<Vec<_>>().join("\n");
+        out.push_str(&format!("--- {} ---\n{head}\n", f.display()));
     }
     out
+}
+
+/// A stable 64-bit hash (FNV-1a) of a section's text, to know whether it changed between runs.
+pub fn fingerprint(text: &str) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in text.trim().bytes() {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("{h:016x}")
 }
 
 #[cfg(test)]

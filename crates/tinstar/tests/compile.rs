@@ -29,12 +29,18 @@ fn fresh_shop(name: &str) -> PathBuf {
 }
 
 fn tinstar(dir: &Path, args: &[&str]) -> (i32, String) {
+    tinstar_with(dir, "compile-replay.json", args)
+}
+
+fn tinstar_with(dir: &Path, replay: &str, args: &[&str]) -> (i32, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_tinstar"))
         .args(args)
         .current_dir(dir)
         .env(
             "TINSTAR_LLM_REPLAY",
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/compile-replay.json"),
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures")
+                .join(replay),
         )
         .env("NO_COLOR", "1")
         .output()
@@ -117,5 +123,56 @@ fn rejects_laws_that_never_pass() {
     // `approve --all` takes laws only, not the rejected folder.
     let (code, _) = tinstar(&dir, &["approve", "--all"]);
     assert_ne!(code, 0);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A rules document with a section about process: the triage sets it aside, the noise check holds
+/// a law that fires (limit 0 here) until the LLM confirms it, and a second run spends nothing.
+#[test]
+fn triage_noise_check_and_incremental_runs() {
+    let dir = fresh_shop("flow");
+    let agents = std::fs::read_to_string(dir.join("AGENTS.md")).unwrap();
+    let section = |name: &str| {
+        let start = agents.find(&format!("## {name}")).unwrap();
+        let end = agents[start + 3..]
+            .find("\n## ")
+            .map_or(agents.len(), |e| start + 3 + e);
+        agents[start..end].trim().to_string()
+    };
+    let doc = format!(
+        "# Rules\n\n{}\n\n{}\n\n## Pull requests\n\nPR titles are imperative.\n",
+        section("Money"),
+        section("Containers")
+    );
+    std::fs::write(dir.join("RULES.md"), &doc).unwrap();
+
+    let args = ["compile", "RULES.md", "--noise-limit", "0"];
+    let (code, out) = tinstar_with(&dir, "compile-flow-replay.json", &args);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("compiling 3 of 3 section(s)"), "{out}");
+    assert!(
+        out.contains("stays in RULES.md: \"PR titles are imperative.\""),
+        "{out}"
+    );
+    assert!(out.contains("1 set aside by the triage"), "{out}");
+    assert!(
+        out.contains("kept after the noise check: the api Deployment really has no limits"),
+        "{out}"
+    );
+    let limits =
+        std::fs::read_to_string(dir.join(".tinstar/laws/pending/containers-have-limits.yaml"))
+            .unwrap();
+    assert!(limits.contains("# Kept after the noise check:"), "{limits}");
+    assert!(out.contains("✓ money-is-cents"), "{out}");
+
+    // Nothing changed: no call at all (the replay has no answers left, so a call would fail).
+    let (code, out) = tinstar_with(&dir, "compile-flow-replay.json", &["compile", "RULES.md"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("compiling 0 of 3 section(s)"), "{out}");
+    assert!(
+        out.contains("= unchanged since the last compile: 1 law(s)"),
+        "{out}"
+    );
+    assert!(out.contains("0 input tokens"), "{out}");
     std::fs::remove_dir_all(&dir).unwrap();
 }

@@ -16,8 +16,9 @@ empty lists.
 
 ## Answer
 
-One JSON object: `{"laws": [{"yaml": "<one law, as YAML text>"}], "not_checkable": [{"statement": "...", "reason": "..."}]}`.
-Each `yaml` holds exactly one law file, as described below.
+One JSON object: `{"laws": [{"yaml": "<one law, as YAML text>"}], "not_checkable": [{"statement": "...", "reason": "..."}], "confirmed": []}`.
+Each `yaml` holds exactly one law file, as described below. `confirmed` stays empty unless tinstar
+asks about a law's hits in the project (see the end).
 
 ## A law file
 
@@ -65,7 +66,10 @@ ast-grep rules, in short:
   node kind (in TypeScript a variable_declarator's identifier is `name`, but a required_parameter's
   is `pattern`).
 - Composition: `all: [...]`, `any: [...]`, `not: {...}`.
-- Messages can use metavariables: "`$NAME` is money: use Money".
+- Messages can use metavariables: "`$NAME` is money: use Money". Every `$VAR` in `message` or
+  `fix` must be captured by the rule, or the law doesn't load.
+- Literals come in several node kinds: in TypeScript/JavaScript a URL can be a `string` or a
+  `template_string` (`` `https://${host}/x` ``); match both (`any: [{kind: string}, {kind: template_string}]`).
 
 ### kind: config — YAML / JSON documents (Kubernetes, compose, CI workflows, package.json…)
 
@@ -123,6 +127,27 @@ Layout examples are lists of file paths (a small project each), not code.
 
 ```yaml
 {{EXAMPLE_LAYOUT}}
+```
+
+After its examples, each law runs on the whole project. The project mostly follows its own rules,
+so a law that fires many times there is usually broader than the rule (it also catches test code,
+generated code, or a look-alike that is fine). Scope laws from the start: leave out tests, fixtures
+and generated files when the rule is about production code. If a law still fires often, tinstar
+sends you a sample of its hits and asks you to narrow it, confirm it, or move the rule to
+`not_checkable`.
+
+Rust keeps tests inside source files. To leave them out, add this to the rule (next to `pattern`,
+`kind`…), besides `ignores: ["**/tests/**", "**/*_tests.rs"]` for test files:
+
+```yaml
+  not:
+    inside:
+      stopBy: end
+      any:
+        - kind: mod_item
+          follows: { kind: attribute_item, regex: 'cfg\(test\)' }
+        - kind: function_item
+          follows: { kind: attribute_item, regex: '^#\[(\w+::)?test' }
 ```
 
 If tinstar reports that a law failed (it doesn't load, or gets one of its own examples wrong), you

@@ -132,3 +132,49 @@ mod tests {
         assert!(e.contains("`$HOST`"), "{e}");
     }
 }
+
+/// The way `tinstar compile`'s prompt tells the LLM to leave Rust's inline tests out.
+#[cfg(test)]
+mod rust_inline_tests {
+    use std::path::Path;
+
+    use crate::{Law, Lawbook};
+
+    #[test]
+    fn leaves_inline_tests_out() {
+        let law = Law::from_yaml(
+            r#"
+id: no-unwrap
+language: rust
+message: unwrap panics
+rule:
+  pattern: $X.unwrap()
+  not:
+    inside:
+      stopBy: end
+      any:
+        - kind: mod_item
+          follows: { kind: attribute_item, regex: 'cfg\(test\)' }
+        - kind: function_item
+          follows: { kind: attribute_item, regex: '^#\[(\w+::)?test' }
+"#,
+        )
+        .expect("the law loads");
+        let src = r#"
+pub fn parse(s: &str) -> u32 { s.parse().unwrap() }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn parses() { "1".parse::<u32>().unwrap(); }
+}
+
+#[gpui::test]
+async fn top_level(cx: &mut TestAppContext) { "3".parse::<u32>().unwrap(); }
+"#;
+        let book = Lawbook::from_laws(Path::new("."), vec![law]);
+        let hits = book.check_source(Path::new("src/lib.rs"), src);
+        let lines: Vec<usize> = hits.iter().filter_map(|d| d.span.map(|s| s.line)).collect();
+        assert_eq!(lines, [2]);
+    }
+}

@@ -12,8 +12,19 @@ use serde_json::{Value, json};
 /// Tokens spent, for the report: compiling is the only moment tinstar spends tokens.
 #[derive(Default, Clone, Copy)]
 pub struct Usage {
+    /// All input tokens, cached ones included.
     pub input: u64,
+    /// The part of `input` read from the provider's prompt cache (billed at a fraction).
+    pub cached: u64,
     pub output: u64,
+}
+
+impl std::ops::AddAssign for Usage {
+    fn add_assign(&mut self, o: Usage) {
+        self.input += o.input;
+        self.cached += o.cached;
+        self.output += o.output;
+    }
 }
 
 pub struct Reply {
@@ -24,7 +35,9 @@ pub struct Reply {
 }
 
 pub trait Llm: Send + Sync {
-    /// `messages` are `{role, content}` objects (user / assistant turns).
+    /// `messages` are `{role, content}` objects (user / assistant turns). `content` is a string or a
+    /// list of text blocks; a block with `"cache": true` ends the stable prefix (the same in every
+    /// call of a run), which providers with prompt caching keep.
     fn complete(
         &self,
         system: &str,
@@ -160,8 +173,8 @@ impl Llm for Anthropic {
         let body = json!({
             "model": self.model,
             "max_tokens": 16000,
-            "system": system,
-            "messages": messages,
+            "system": [{ "type": "text", "text": system, "cache_control": { "type": "ephemeral" } }],
+            "messages": messages.iter().map(anthropic_message).collect::<Vec<_>>(),
             "output_config": {
                 "effort": "high",
                 "format": { "type": "json_schema", "schema": schema },
@@ -196,11 +209,52 @@ impl Llm for Anthropic {
             text,
             // The whole content goes back, thinking blocks included, unchanged.
             message: json!({ "role": "assistant", "content": v["content"] }),
-            usage: Usage {
-                input: v["usage"]["input_tokens"].as_u64().unwrap_or(0),
-                output: v["usage"]["output_tokens"].as_u64().unwrap_or(0),
+            usage: {
+                let u = &v["usage"];
+                let n = |k: &str| u[k].as_u64().unwrap_or(0);
+                Usage {
+                    // input_tokens counts only what came after the last cache breakpoint.
+                    input: n("input_tokens")
+                        + n("cache_read_input_tokens")
+                        + n("cache_creation_input_tokens"),
+                    cached: n("cache_read_input_tokens"),
+                    output: n("output_tokens"),
+                }
             },
         })
+    }
+}
+
+/// Text blocks marked `cache` get a cache breakpoint.
+fn anthropic_message(m: &Value) -> Value {
+    let Some(blocks) = m["content"].as_array() else {
+        return m.clone();
+    };
+    let content: Vec<Value> = blocks
+        .iter()
+        .map(|b| {
+            if b.get("text").is_none() {
+                return b.clone(); // thinking and other blocks go back unchanged
+            }
+            let mut out = json!({ "type": "text", "text": b["text"] });
+            if b["cache"] == true {
+                out["cache_control"] = json!({ "type": "ephemeral" });
+            }
+            out
+        })
+        .collect();
+    json!({ "role": m["role"], "content": content })
+}
+
+/// OpenAI-compatible servers take plain strings; their prompt caching (DeepSeek, OpenAI) is
+/// automatic on a repeated prefix.
+fn plain_message(m: &Value) -> Value {
+    match m["content"].as_array() {
+        Some(blocks) => {
+            let text: Vec<&str> = blocks.iter().filter_map(|b| b["text"].as_str()).collect();
+            json!({ "role": m["role"], "content": text.join("\n\n") })
+        }
+        None => m.clone(),
     }
 }
 
@@ -229,7 +283,7 @@ impl Llm for OpenAiCompatible {
             "role": "system",
             "content": format!("{system}\n\nAnswer with one JSON object matching this JSON Schema:\n{schema}"),
         })];
-        all.extend(messages.iter().cloned());
+        all.extend(messages.iter().map(plain_message));
         let body = json!({
             "model": self.model,
             "messages": all,
@@ -254,9 +308,17 @@ impl Llm for OpenAiCompatible {
         Ok(Reply {
             message: json!({ "role": "assistant", "content": text }),
             text,
-            usage: Usage {
-                input: v["usage"]["prompt_tokens"].as_u64().unwrap_or(0),
-                output: v["usage"]["completion_tokens"].as_u64().unwrap_or(0),
+            usage: {
+                let u = &v["usage"];
+                Usage {
+                    input: u["prompt_tokens"].as_u64().unwrap_or(0),
+                    // DeepSeek reports prompt_cache_hit_tokens; OpenAI, prompt_tokens_details.
+                    cached: u["prompt_cache_hit_tokens"]
+                        .as_u64()
+                        .or_else(|| u["prompt_tokens_details"]["cached_tokens"].as_u64())
+                        .unwrap_or(0),
+                    output: u["completion_tokens"].as_u64().unwrap_or(0),
+                }
             },
         })
     }

@@ -92,10 +92,23 @@ tinstar approve --all           # after reviewing .tinstar/laws/pending/
 ```
 
 `tinstar compile` sends each section of the document, with a picture of the project, to an LLM and asks
-for laws. Every law that comes back is compiled and run against its own examples; a law that doesn't
-load or gets an example wrong goes back to the LLM with the error (`--attempts`, 3 by default). Only
-laws that pass are written, to `.tinstar/laws/pending/`, where nothing is enforced until a person
-approves them. Rules that can't be checked from the code are listed and stay in the document.
+for laws. Every law that comes back is checked twice before anyone sees it:
+
+- **against its own examples**: a law that doesn't load or gets an example wrong goes back to the
+  LLM with the error (`--attempts`, 3 by default);
+- **against the project** (the noise check): a law that fires more than `--noise-limit` times (25)
+  in a project that mostly follows its own rules is probably broader than the rule. It goes back
+  with the numbers (how many hits are in test code, in which folders) and a sample of the code it
+  caught, to be narrowed, confirmed, or left to the document.
+
+Only laws that pass are written, to `.tinstar/laws/pending/`, where nothing is enforced until a
+person approves them; drafts that never pass are kept in `pending/rejected/` with their last error.
+Rules that can't be checked from the code are listed and stay in the document.
+
+Tokens are kept low in three ways: a first, cheap pass over the whole document sets aside sections
+with nothing checkable (process, intent); the prompt's stable start (law format, project picture)
+comes first so providers' prompt caches serve it; and `.tinstar/compiled.json` remembers what each
+section gave, so running again only sends sections whose text changed (`--force` sends all).
 
 ```console
 ## Money (AGENTS.md#money)

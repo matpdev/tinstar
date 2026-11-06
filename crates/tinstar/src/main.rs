@@ -59,6 +59,16 @@ enum Command {
         /// API base URL (for --provider compatible: e.g. http://localhost:11434/v1 for Ollama).
         #[arg(long)]
         base_url: Option<String>,
+        /// Recompile every section, even the ones unchanged since the last compile.
+        #[arg(long)]
+        force: bool,
+        /// Skip the first pass that sets aside sections with nothing checkable.
+        #[arg(long)]
+        no_triage: bool,
+        /// A law that fires more often than this in the project goes back to the LLM with a sample
+        /// of its hits, to be narrowed or confirmed.
+        #[arg(long, default_value_t = 25)]
+        noise_limit: usize,
     },
     /// Move reviewed laws from .tinstar/laws/pending/ into the lawbook.
     Approve {
@@ -132,6 +142,9 @@ fn run() -> Result<ExitCode> {
             provider,
             model,
             base_url,
+            force,
+            no_triage,
+            noise_limit,
         } => compile::run(
             &root,
             compile::Options {
@@ -141,6 +154,9 @@ fn run() -> Result<ExitCode> {
                 provider,
                 model,
                 base_url,
+                force,
+                triage: !no_triage,
+                noise_limit,
             },
         ),
         Command::Approve { ids, all } => compile::approve(&root, &ids, all),
