@@ -33,8 +33,8 @@ error[feature-has-test] Feature folder is incomplete (missing `**/*.test.ts`)
 ✗ 8 error(s), 1 other(s), from 9 law(s)
 ```
 
-> **Status: early.** The engine and the CLI work. Next: the language server (Zed, VS Code), agent hooks,
-> and `tinstar compile`, which drafts laws from your `AGENTS.md` with an LLM, once.
+> **Status: early.** The engine, the CLI, the language server (Zed) and the Claude Code hook work.
+> Next: `tinstar compile`, which drafts laws from your `AGENTS.md` with an LLM, once.
 
 ## Laws
 
@@ -96,7 +96,28 @@ tinstar check --changed         # files changed in git (modified, staged, untrac
 tinstar check --format agent    # one line per problem, for AI agents
 tinstar check --format json     # for tools
 tinstar laws                    # list the laws
+tinstar lsp                     # language server, over stdio
+tinstar hook claude-code        # agent hook (reads the tool call on stdin)
 ```
+
+### In your editor
+
+`tinstar lsp` is a language server: broken laws show up as you type, with the plain-language law next
+to them and a quick fix when the law has one. Law files are checked as you write them: a typo, a bad
+rule or an example the law gets wrong is underlined in the YAML itself.
+
+- **Zed:** install the binary, then *zed: install dev extension* and pick [`editors/zed`](editors/zed).
+- **Any other editor:** run `tinstar lsp` over stdio for the languages you use.
+
+### With AI agents
+
+The agent edits a file, tinstar checks it and, if a law broke, tells the agent which one, where, how to
+fix it, and the rule in plain language. The agent fixes it before going on.
+
+- **Claude Code:** add [`integrations/claude-code/settings.json`](integrations/claude-code/settings.json)
+  to your project's `.claude/settings.json` (a `PostToolUse` hook running `tinstar hook claude-code`).
+  It reports errors and warnings in the edited file (and in its folder, for layout laws), and stays
+  silent otherwise.
 
 Exit status: `0` nothing broken, `1` a law with `severity: error` is broken, `2` a law file is invalid
 or the command failed. Files ignored by `.gitignore` are not checked.

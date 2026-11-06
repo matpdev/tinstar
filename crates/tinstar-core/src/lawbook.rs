@@ -84,7 +84,10 @@ impl Lawbook {
                         law.id
                     )),
                 }),
-                Ok(law) => laws.push(law),
+                Ok(mut law) => {
+                    law.path = Some(rel);
+                    laws.push(law);
+                }
                 Err(error) => errors.push(LoadError { path: rel, error }),
             }
         }
@@ -95,6 +98,11 @@ impl Lawbook {
             },
             errors,
         )
+    }
+
+    /// The law with this id.
+    pub fn law(&self, id: &str) -> Option<&Law> {
+        self.laws.iter().find(|l| l.id == id)
     }
 
     /// A lawbook made of laws already in hand (tests, `tinstar test`).

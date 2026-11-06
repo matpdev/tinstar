@@ -1,4 +1,6 @@
+mod hook;
 mod init;
+mod lsp;
 mod output;
 
 use std::path::{Path, PathBuf};
@@ -37,6 +39,13 @@ enum Command {
     Test,
     /// List the laws.
     Laws,
+    /// Run the language server (stdio), for editors and agents.
+    Lsp,
+    /// Run as an agent hook: check the file the agent just edited and tell it what it broke.
+    Hook {
+        #[arg(value_enum)]
+        agent: hook::Agent,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -63,10 +72,17 @@ fn run() -> Result<ExitCode> {
     let cli = Cli::parse();
     let cwd = std::env::current_dir()?;
 
-    if let Command::Init = cli.command {
-        let root = cli.root.unwrap_or(cwd);
-        init::run(&root)?;
-        return Ok(ExitCode::SUCCESS);
+    match &cli.command {
+        Command::Init => {
+            init::run(&cli.root.unwrap_or(cwd))?;
+            return Ok(ExitCode::SUCCESS);
+        }
+        Command::Lsp => {
+            lsp::run()?;
+            return Ok(ExitCode::SUCCESS);
+        }
+        Command::Hook { agent } => return hook::run(*agent),
+        _ => {}
     }
 
     let root = match cli.root {
@@ -81,7 +97,7 @@ fn run() -> Result<ExitCode> {
     report_load_errors(&errors);
 
     match cli.command {
-        Command::Init => unreachable!("handled above"),
+        Command::Init | Command::Lsp | Command::Hook { .. } => unreachable!("handled above"),
         Command::Laws => {
             output::laws(&book);
             Ok(exit_for_load(&errors))

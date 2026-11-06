@@ -1,0 +1,15 @@
+id = "tinstar"
+name = "Tinstar"
+description = "The law in your repo: your project's rules, written in plain language, as diagnostics and quick fixes."
+version = "0.1.0"
+schema_version = 1
+authors = ["Matheus Nunes <matheus2ep@gmail.com>"]
+repository = "https://github.com/matpdev/tinstar"
+
+[language_servers.tinstar]
+name = "Tinstar"
+languages = [
+  "TypeScript", "TSX", "JavaScript", "Python", "Rust", "Go", "Java", "Kotlin", "Swift",
+  "C", "C++", "C#", "Ruby", "PHP", "Lua", "Elixir", "Scala", "Dart", "Zig", "Nix",
+  "YAML", "JSON", "JSONC", "HCL", "Terraform", "Shell Script", "HTML", "CSS",
+]

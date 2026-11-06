@@ -14,11 +14,11 @@ One engine, several front-ends. Every front-end loads the same `Lawbook` and rep
                  │ Lawbook::check_project(targets)    ← both, for files on disk                           │
                  └───────────────┬───────────────────────────────┬──────────────────────┬────────────────┘
                                  │                               │                      │
-                        tinstar check / test            tinstar lsp (stage 2)   tinstar hook (stage 2)
+                        tinstar check / test            tinstar lsp             tinstar hook
                         human · json · agent            Zed · VS Code · agents  Claude Code & co.
 ```
 
-## Language server (stage 2)
+## Language server
 
 Simple to read: one file per concern, one owner for the state, no locks.
 
@@ -61,7 +61,7 @@ crates/tinstar/src/lsp/
 | **Versioned results, "latest wins"** | `CheckDone.version` | A result for an older version of the document is dropped. Cheaper and simpler than cancelling work. |
 | **Debounce** | `didChange` → ~150 ms | Keystrokes are coalesced: one check per pause, not one per key. `didSave` checks at once. |
 | **Immutable snapshot** (copy-on-write) | `Arc<Lawbook>` | Editing a law swaps in a new book; running jobs finish with the old one and never see half-loaded laws. |
-| **Memoization** | `(content hash, book generation) → diagnostics` | Saving unchanged text, or reopening a file, costs nothing. |
+| **Memoization** | `(content hash, book generation) → diagnostics` | Saving unchanged text costs nothing. |
 | **Mapper** | `lsp/convert.rs` | All LSP details (UTF-16 columns, severities, codes) live in one place. |
 
 ### What a diagnostic carries in the editor
@@ -72,9 +72,13 @@ crates/tinstar/src/lsp/
 - `relatedInformation`: the law as written in plain language and where it lives (`AGENTS.md#money`);
 - `data`: the fix, if the law has one, so `codeAction` can offer it without checking again.
 
-Layout laws are about the project, not one file: they run on start and when files are created,
-deleted or renamed (`workspace/didChangeWatchedFiles`), and their diagnostics are published on the
-offending file (or, for a folder, on the law's own file).
+Layout laws are about the project, not one file: they run on start, on save and when files are
+created or deleted (`workspace/didChangeWatchedFiles`), and their diagnostics are published on the
+offending file or, for a folder, on its first file (usually its index), where people work.
+
+Law files get diagnostics of their own: while one is being typed it is compiled and run against its
+examples, so a typo, a bad rule or a wrong example is underlined in the YAML before it is saved.
+Saving a law reloads the book.
 
 ### Speed, in numbers to keep
 

@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/tinstar-core", "crates/tinstar"]
+exclude = ["editors/zed"]
 
 [workspace.package]
 version = "0.1.0"

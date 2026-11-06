@@ -110,6 +110,16 @@ pub enum LawError {
     Invalid(String),
 }
 
+impl LawError {
+    /// 1-based (line, column) in the law file, when the YAML parser knows it.
+    pub fn location(&self) -> Option<(usize, usize)> {
+        match self {
+            LawError::Yaml(e) => e.location().map(|l| (l.line(), l.column())),
+            LawError::Invalid(_) => None,
+        }
+    }
+}
+
 pub(crate) fn invalid<T>(msg: impl Into<String>) -> Result<T, LawError> {
     Err(LawError::Invalid(msg.into()))
 }
@@ -123,6 +133,8 @@ pub struct Law {
     pub statement: Option<String>,
     pub source: Option<String>,
     pub hint: Option<String>,
+    /// The law's file, relative to the project root (set when loaded from `.tinstar/laws/`).
+    pub path: Option<std::path::PathBuf>,
     files: Option<GlobSet>,
     ignores: Option<GlobSet>,
     pub(crate) check: Check,
@@ -150,6 +162,7 @@ impl Law {
             statement: file.statement,
             source: file.source,
             hint: file.hint,
+            path: None,
             check,
             examples: file.examples,
         })
